@@ -91,6 +91,10 @@ export class Router {
     let c: number;
     if (o.live) c = l.ttEst + l.delayEMA;
     else c = l.ttFree * 0.6 + l.ttEst * 0.4 + l.delayEMA * 0.5;
+    // drivers prefer the arterial network: local streets feel slower (parked cars,
+    // pedestrians, traffic calming), wide roads feel faster
+    const cls = l.road.cls;
+    c *= cls === 'local' ? 1.32 : cls === 'boulevard' ? 0.92 : 1;
     if (o.noise && o.seed !== undefined) {
       const h = Math.imul(o.seed ^ (l.id * 2654435761), 0x45d9f3b) >>> 0;
       c *= 1 + ((h % 1000) / 1000 - 0.5) * 2 * o.noise;
@@ -171,11 +175,20 @@ export class Router {
     return c;
   }
 
+  /**
+   * Realistic uncongested travel time: driving the links at ~85% of the limit,
+   * traversing each junction (accelerate / brake for the turn) and pulling out /
+   * parking at the ends.
+   */
   freeFlowTime(route: Link[]): number {
-    let t = 0;
+    let t = 8;
     for (let i = 0; i < route.length; i++) {
-      t += route[i].ttFree;
-      if (i > 0) t += this.turnCost(route[i - 1], route[i]) * 0.5;
+      const l = route[i];
+      t += l.length / Math.max(4, l.road.speed * 0.85);
+      if (i > 0) {
+        const tc = this.turnCost(route[i - 1], l);
+        t += tc >= this.turnPenalty.U ? 14 : tc >= this.turnPenalty.L ? 8.5 : tc >= this.turnPenalty.R ? 7 : 4.5;
+      }
     }
     return t;
   }

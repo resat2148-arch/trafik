@@ -354,7 +354,9 @@ export class Demand {
       this.garages.set(o.id, (q = []));
       this.garageList.push(o.id);
     }
-    if (q.length >= 4) {
+    // parking garages of big buildings can hold more departing cars
+    const cap = 4 + Math.floor((o.jobs + o.pop) / 30);
+    if (q.length >= cap) {
       this.stats.blocked++;
       return;
     }

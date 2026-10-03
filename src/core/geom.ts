@@ -115,6 +115,17 @@ export function arcPoints(cx: number, cy: number, r: number, a0: number, a1: num
   return pts;
 }
 
+/** Full circle polygon (open, no duplicated end point). */
+export function circlePoints(cx: number, cy: number, r: number, step = 1.0): V2[] {
+  const n = Math.max(12, Math.ceil((Math.PI * 2 * r) / step));
+  const pts: V2[] = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    pts.push({ x: cx + Math.cos(a) * r, y: cy + Math.sin(a) * r });
+  }
+  return pts;
+}
+
 /** Arc with an explicit sweep direction */
 export function arcPointsDir(cx: number, cy: number, r: number, a0: number, sweep: number, step = 1.2): V2[] {
   const n = Math.max(1, Math.ceil((Math.abs(sweep) * r) / step));

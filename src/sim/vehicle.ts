@@ -159,6 +159,7 @@ export class Vehicle {
   rerouteT = 0;
   mood = 0; // 0 calm .. 1 furious
   hornT = 0;
+  hornFlash = 0;
   origin = -1;
   // render
   pose: Pose = makePose();
@@ -197,13 +198,13 @@ export class Vehicle {
     this.aggr = ag;
     this.seed = Math.floor(rng.next() * 1e9);
     this.v0f = 0.9 + ag * 0.2 + rng.normal(0, 0.03);
-    this.T = Math.max(0.8, 1.65 - ag * 0.75 + rng.normal(0, 0.1));
-    this.s0 = Math.max(1.2, 2.4 - ag * 0.9 + rng.normal(0, 0.15));
+    this.T = Math.max(0.75, 1.5 - ag * 0.7 + rng.normal(0, 0.1));
+    this.s0 = Math.max(1.2, 2.2 - ag * 0.8 + rng.normal(0, 0.15));
     this.a *= 0.85 + ag * 0.35;
     this.b *= 0.9 + ag * 0.3;
     this.polite = Math.max(0, 0.55 - ag * 0.5 + rng.normal(0, 0.1));
     this.gapT = Math.max(0.6, 2.3 - ag * 1.4 + rng.normal(0, 0.2));
-    this.react = Math.max(0.35, 1.05 - ag * 0.5 + rng.normal(0, 0.12));
+    this.react = Math.max(0.3, 0.85 - ag * 0.45 + rng.normal(0, 0.1));
     this.aLatF = 0.9 + ag * 0.3;
     this.boxBlock = ag > 0.68 && rng.chance(0.55);
     this.redRun = ag > 0.75 && rng.chance(0.35);

@@ -334,6 +334,7 @@ export class Sim {
       v.acc = 0;
       v.v = 0;
       v.hazard = true;
+      v.stateT += dt;
       return;
     }
     if (v.state === 'park') {
@@ -425,9 +426,11 @@ export class Sim {
       if (this.rng.chance(0.04 + v.aggr * 0.05)) {
         this.events.push({ type: 'horn', x: v.x, y: v.y, v });
         v.hornT = 6 + this.rng.next() * 10;
+        v.hornFlash = 1.6;
       }
     }
     if (v.hornT > 0) v.hornT -= dt;
+    if (v.hornFlash > 0) v.hornFlash -= dt;
     if (v.stuckT > 160 && !v.emergency && !v.bus) this.removeVehicle(v, 'abandon');
     // periodic rerouting with navigation apps / when stuck
     v.rerouteT -= dt;
@@ -1137,6 +1140,7 @@ export class Sim {
       v.lastEvt = `enter ${next.isLane ? 'lane' : 'conn'} ${next.id} from ${seg.id} s=${v.s.toFixed(2)} idx=${next.vehs.indexOf(v)}/${next.vehs.length}`;
       v.lastEvtT = this.time;
       if (next.isLane) {
+        (next as Lane).link.flowCount++;
         v.ri++;
         v.committed = null;
         v.stopDone = false;
@@ -1599,7 +1603,7 @@ export class Sim {
     this.vehicles.push(v);
     this.planAhead(v);
     v.spawnT = this.time;
-    v.ffTime = Math.max(8, this.router.freeFlowTime(route) * 0.85);
+    v.ffTime = Math.max(10, this.router.freeFlowTime(route));
     v.rerouteT = 10 + this.rng.next() * 20;
     v.lcCool = 0.5;
     v.state = 'drive';
@@ -1706,6 +1710,7 @@ export class Sim {
       l.ttEst += (target - l.ttEst) * Math.min(1, 0.3 * dt);
       l.speedEMA += (vAvg - l.speedEMA) * Math.min(1, 0.3 * dt);
       if (!n) l.delayEMA *= 0.97;
+      l.flowCount *= Math.pow(0.985, dt);
     }
     for (const n of this.net.nodes) {
       // remove stale vehicles from all-way stop queues

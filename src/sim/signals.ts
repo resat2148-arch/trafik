@@ -331,6 +331,42 @@ export class SignalCtrl {
     return Math.max(0, ph.dur - this.t) + this.yellow;
   }
 
+  /**
+   * Webster-style retiming: green split proportional to the measured demand of
+   * each phase (recent flow + current queues), cycle length from the number of phases.
+   */
+  autoTime(): void {
+    const demand = this.phases.map((p) => {
+      let q = 0;
+      const lanes = new Set<Lane>();
+      for (const c of p.green.keys()) if (c.fromLane) lanes.add(c.fromLane);
+      for (const l of lanes) q += l.link.flowCount / Math.max(1, l.link.lanes.length) + l.vehs.length * 1.5;
+      for (const a of p.arms) q += a.road.cls === 'local' ? 1.5 : a.road.cls === 'avenue' ? 4 : 6;
+      return q + 1;
+    });
+    const total = demand.reduce((a, b) => a + b, 0);
+    const lost = this.phases.length * (this.yellow + this.allRed);
+    const ratio = Math.min(0.9, total / 120);
+    const cycle = Math.max(40, Math.min(110, (1.5 * lost + 5) / (1 - ratio) + this.phases.length * 6));
+    const green = Math.max(8 * this.phases.length, cycle - lost);
+    this.phases.forEach((p, i) => {
+      p.dur = Math.max(p.kind === 'left' ? 6 : 8, Math.min(70, Math.round((green * demand[i]) / total)));
+    });
+  }
+
+  /** an outdated timing plan from decades ago: side roads get far too much green */
+  legacyTiming(rnd: () => number): void {
+    if (this.phases.length < 2) return;
+    const major = (p: Phase): number => p.arms.reduce((a, arm) => a + (arm.road.cls === 'local' ? 1 : arm.road.cls === 'avenue' ? 3 : 4), 0);
+    const scores = this.phases.map(major);
+    const max = Math.max(...scores);
+    const min = Math.min(...scores);
+    this.phases.forEach((p, i) => {
+      if (max === min) p.dur = Math.round(18 + rnd() * 24);
+      else p.dur = scores[i] === max ? Math.round(11 + rnd() * 6) : Math.round(30 + rnd() * 14);
+    });
+  }
+
   save(): SignalSave {
     return {
       plan: this.plan,
