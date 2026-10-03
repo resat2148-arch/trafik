@@ -80,6 +80,7 @@ export const COST = {
   greenwave: 1000,
   rtor: 100,
   preempt: 2500,
+  police: 600,
 };
 
 export const UPKEEP = {

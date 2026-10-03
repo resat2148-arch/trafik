@@ -321,3 +321,5 @@ input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 
   .icon-btn.menu-btn { width: 36px; height: 36px; }
   .sat-bar { width: 96px; }
 }
+.btn.police { margin-top: 10px; background: rgba(53,120,255,.15); border-color: rgba(53,120,255,.4); }
+.btn.police.disabled { opacity: .45; pointer-events: none; }

@@ -66,6 +66,7 @@ export class WorldView {
   private islandMesh: THREE.Mesh | null = null;
   private signalGroup = new THREE.Group();
   private signalLamps: THREE.InstancedMesh | null = null;
+  private stopBars: THREE.InstancedMesh | null = null;
   private heads: SignalHead[] = [];
   lampHeads: THREE.InstancedMesh | null = null;
   lampPools: THREE.InstancedMesh | null = null;
@@ -1082,7 +1083,30 @@ export class WorldView {
       });
       this.signalLamps = inst;
       this.signalGroup.add(inst);
-    } else this.signalLamps = null;
+      // glowing stop-line bars: signal state readable from any zoom level
+      const bg = new THREE.PlaneGeometry(1, 1);
+      bg.rotateX(-Math.PI / 2);
+      const bars = new THREE.InstancedMesh(
+        bg,
+        new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0.9, depthWrite: false }),
+        this.heads.length,
+      );
+      const up = new THREE.Vector3(0, 1, 0);
+      this.heads.forEach((hd, i) => {
+        const e = hd.lane.path.end();
+        const d = hd.lane.path.endDir();
+        q.setFromAxisAngle(up, -Math.atan2(d.y, d.x));
+        m.compose(new THREE.Vector3(e.x - d.x * 0.9, 0.05, e.y - d.y * 0.9), q, new THREE.Vector3(1.1, 1, hd.lane.width * 0.86));
+        bars.setMatrixAt(i, m);
+        bars.setColorAt(i, col);
+      });
+      bars.renderOrder = 3;
+      this.stopBars = bars;
+      this.signalGroup.add(bars);
+    } else {
+      this.signalLamps = null;
+      this.stopBars = null;
+    }
   }
 
   /** update signal lamp colours, night lights */
@@ -1093,7 +1117,8 @@ export class WorldView {
     if (inst) {
       const col = new THREE.Color();
       const dim = 0.07;
-      for (const h of this.heads) {
+      for (let hi = 0; hi < this.heads.length; hi++) {
+        const h = this.heads[hi];
         let best = SIG_R;
         for (const c of h.conns) {
           if (c.sig === SIG_G) best = SIG_G;
@@ -1109,8 +1134,15 @@ export class WorldView {
         inst.setColorAt(h.lampBase + 1, col);
         col.setRGB(green ? 0.15 : dim * 0.3, green ? 3.0 : dim * 1.2, green ? 1.4 : dim * 0.8);
         inst.setColorAt(h.lampBase + 2, col);
+        if (this.stopBars) {
+          if (red) col.setRGB(1.0, 0.1, 0.08);
+          else if (amber) col.setRGB(1.0, 0.62, 0.05);
+          else col.setRGB(0.12, 0.95, 0.35);
+          this.stopBars.setColorAt(hi, col);
+        }
       }
       if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+      if (this.stopBars?.instanceColor) this.stopBars.instanceColor.needsUpdate = true;
     }
     (this.mats.lampHead as THREE.MeshStandardMaterial).emissiveIntensity = night * 2.2;
     if (this.lampPools) (this.lampPools.material as THREE.MeshBasicMaterial).opacity = night * 0.55;

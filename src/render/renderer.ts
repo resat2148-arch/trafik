@@ -9,6 +9,7 @@ import { Overlays } from './overlays.ts';
 import { makeTextures } from './textures.ts';
 import type { TextureSet } from './textures.ts';
 import { VehicleView } from './vehicles.ts';
+import { Pedestrians } from './pedestrians.ts';
 import { WorldView } from './world.ts';
 import type { Quality } from './world.ts';
 
@@ -34,6 +35,7 @@ export class GameRenderer {
   world!: WorldView;
   vehicles!: VehicleView;
   overlays = new Overlays();
+  peds: Pedestrians | null = null;
   tex: TextureSet;
   city: City | null = null;
   quality: Quality & { shadowRes: number };
@@ -75,6 +77,10 @@ export class GameRenderer {
     this.scene.add(this.world.group);
     this.vehicles = new VehicleView(this.tex, this.quality.shadows);
     this.scene.add(this.vehicles.group);
+    if (this.peds) this.scene.remove(this.peds.group);
+    this.peds = new Pedestrians(this.quality.shadows ? 420 : 200);
+    this.peds.build(city);
+    this.scene.add(this.peds.group);
     this.overlays.buildTraffic(city.net);
     const b = city.bounds;
     this.rig.bounds = { minx: b.minx - 60, miny: b.miny - 60, maxx: b.maxx + 60, maxy: b.maxy + 60 };
@@ -115,6 +121,7 @@ export class GameRenderer {
       sim.updatePoses();
       this.vehicles.update(sim, dt, night);
     }
+    this.peds?.update(dt, night, this.rig.target, this.rig.viewRadius);
     this.overlays.update(dt, sim, night);
     this.renderer.render(this.scene, this.rig.camera);
   }

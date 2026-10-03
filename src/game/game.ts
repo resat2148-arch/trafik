@@ -123,6 +123,8 @@ export class Game {
   private warnT = 0;
   private lastHour = 6;
   private lastBlocked = 0;
+  private lastPopup = 0;
+  policeCooldown = new Map<number, number>();
   endless = false;
   menuMode = false;
   onTick: (() => void) | null = null;
@@ -436,6 +438,15 @@ export class Game {
         this.sat += (score - this.sat) * 0.018;
         const toll = Math.round(3 + (score / 100) * 4);
         this.money += toll;
+        // occasional floating income near the camera
+        const now = performance.now();
+        if (now - this.lastPopup > 650) {
+          const rig = this.renderer.rig;
+          if (Math.hypot(e.v.x - rig.target.x, e.v.y - rig.target.z) < rig.viewRadius * 0.9) {
+            this.lastPopup = now;
+            this.ui?.floatText(e.v.x, e.v.y, `+$${toll}`, score > 70 ? '#7dffa8' : score > 40 ? '#ffe08a' : '#ff9a8a');
+          }
+        }
         this.stats.income += toll;
         this.stats.trips++;
         this.stats.tripTime += e.time;
@@ -881,6 +892,7 @@ export class Game {
       this.autoTime(n, true);
     }
     this.renderer.world.refresh({ roads: wasRA || c === 'roundabout', blocks: wasRA || c === 'roundabout' });
+    if (wasRA || c === 'roundabout') this.renderer.peds?.build(this.city);
     this.renderer.overlays.buildTraffic(this.city.net);
     this.afterChange();
     this.ui?.tutorialEvent('control:' + c);
@@ -1137,6 +1149,35 @@ export class Game {
     inc.clearAfter = Math.max(inc.clearAfter, inc.age + 240);
     this.ui?.toast(t('towOnWay'), 'info');
     this.ui?.refreshPanel();
+  }
+
+  /** traffic police untangle a gridlocked junction */
+  sendPolice(n: Node): void {
+    const until = this.policeCooldown.get(n.id) ?? 0;
+    if (this.sim.time < until) return;
+    if (!this.pay(COST.police, n.x, n.y)) return;
+    let cleared = 0;
+    for (const c of [...n.conns, ...n.dying]) {
+      for (const v of c.vehs.slice()) {
+        if (v.v < 0.6 && !v.emergency && v.state === 'drive') {
+          this.sim.removeVehicle(v, 'cleared');
+          cleared++;
+        }
+      }
+    }
+    for (const a of n.arms) {
+      for (const l of a.inLink?.lanes ?? []) {
+        for (const v of l.vehs.slice()) {
+          if (v.stuckT > 18 && !v.emergency && v.state === 'drive') {
+            this.sim.removeVehicle(v, 'cleared');
+            cleared++;
+          }
+        }
+      }
+    }
+    this.policeCooldown.set(n.id, this.sim.time + 45);
+    this.ui?.toast(`🚓 ${t('policeDone', { n: cleared })}`, 'good');
+    this.afterChange(false);
   }
 
   togglePolicy(id: string): void {

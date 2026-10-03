@@ -138,6 +138,18 @@ export class Panels {
     body.append(h('div', { class: 'sec-title' }, t('control')), grid, h('div', { class: 'hint' }, t(`ctrlDesc_${n.control === 'none' ? 'priority' : n.control}` as StrKey)));
     if (n.control === 'priority') this.prioritySection(body, n);
     if (n.control === 'signal' && n.signal) this.signalSection(body, n);
+    // police (gridlock breaker)
+    {
+      const cd = (g.policeCooldown.get(n.id) ?? 0) - g.sim.time;
+      body.append(
+        h(
+          'button',
+          { class: `btn wide police ${cd > 0 ? 'disabled' : ''}`, title: t('policeDesc'), onclick: () => g.sendPolice(n) },
+          h('span', null, '🚓 ', t('police')),
+          h('span', { class: 'cost' }, money(COST.police)),
+        ),
+      );
+    }
     // yellow box
     if (n.control !== 'roundabout') {
       const lock = this.locked('box');
