@@ -389,8 +389,11 @@ export class Menus {
       { class: 'seg' },
       ...(['low', 'medium', 'high'] as const).map((lv) =>
         h('button', { class: q === lv ? 'active' : '', onclick: () => {
-          s.quality = lv;
-          storeSave(s, true);
+          if (lv !== q) g.applyQuality(lv);
+          else if (!s.qualityManual) {
+            s.qualityManual = true;
+            storeSave(s, true);
+          }
           this.closeTop();
           this.settings();
         } }, t(lv)),
@@ -412,7 +415,6 @@ export class Menus {
         storeSave(s);
       })),
       h('div', { class: 'set-row' }, h('span', null, t('graphics')), qSeg),
-      h('div', { class: 'hint' }, t('qualityNote')),
       h(
         'div',
         { class: 'row center gap' },

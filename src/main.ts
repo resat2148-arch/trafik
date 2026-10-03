@@ -2,7 +2,7 @@ import './fonts.css';
 import './styles.css';
 import { Game } from './game/game.ts';
 import { UI } from './ui/ui.ts';
-import { detectLang, setLang } from './game/i18n.ts';
+import { detectLang, setLang, t } from './game/i18n.ts';
 import { Platform } from './platform/crazygames.ts';
 import { Audio } from './audio/audio.ts';
 import { loadSave } from './game/save.ts';
@@ -62,16 +62,40 @@ async function main(): Promise<void> {
   let last = performance.now();
   let fpsT = 0;
   let frames = 0;
+  // step graphics down on slow devices unless the player picked a level
+  let slowT = 0;
+  const autoQuality = (fps: number): void => {
+    if (game.save.qualityManual || game.phase !== 'playing' || game.speed === 0 || document.hidden) {
+      slowT = 0;
+      return;
+    }
+    slowT = fps < 26 ? slowT + 1 : Math.max(0, slowT - 1);
+    if (slowT < 6) return;
+    slowT = 0;
+    const lv = game.renderer.level;
+    const next = lv === 'high' ? 'medium' : lv === 'medium' ? 'low' : null;
+    if (!next) return;
+    game.applyQuality(next, false);
+    ui.toast(t('qualityAuto'), 'info');
+  };
   const loop = (now: number): void => {
-    const dt = Math.min(0.1, (now - last) / 1000);
+    const raw = (now - last) / 1000;
+    const dt = Math.min(0.1, raw);
     last = now;
     game.renderer.rig.autoOrbit = game.phase === 'menu';
     game.update(dt);
     ui.tick(dt);
-    frames++;
-    fpsT += dt;
+    // frame rate from real time; long stalls (hidden tab, ads) restart the window
+    if (raw > 1.5) {
+      frames = 0;
+      fpsT = 0;
+    } else {
+      frames++;
+      fpsT += raw;
+    }
     if (fpsT > 1) {
       (window as unknown as { __fps: number }).__fps = frames / fpsT;
+      autoQuality(frames / fpsT);
       frames = 0;
       fpsT = 0;
     }

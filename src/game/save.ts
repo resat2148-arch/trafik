@@ -52,6 +52,8 @@ export interface SaveData {
   sfx: number;
   music: number;
   quality: QualityLevel | null;
+  /** quality picked by the player (never auto-adjusted then) */
+  qualityManual: boolean;
   tutorialDone: boolean;
   progress: Record<string, CityProgress>;
   run: RunSave | null;
@@ -66,6 +68,7 @@ export function defaultSave(): SaveData {
     sfx: 0.8,
     music: 0.45,
     quality: null,
+    qualityManual: false,
     tutorialDone: false,
     progress: { maple: { unlocked: true, bestDay: 0, stars: [], completed: false } },
     run: null,

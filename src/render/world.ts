@@ -784,7 +784,8 @@ export class WorldView {
   private buildTrees(): void {
     const c = this.city;
     const rng = new RNG(99);
-    const spots: { x: number; y: number; s: number; kind: number }[] = [];
+    // kind: 0 broadleaf, 1 conifer, 2 lighter broadleaf for the countryside
+    const spots: { x: number; y: number; s: number; kind: number; forest?: boolean }[] = [];
     const dens = this.quality.trees;
     for (const b of c.blocks) {
       for (const t of b.trees) if (rng.next() < dens) spots.push({ x: t.x, y: t.y, s: rng.range(0.8, 1.35), kind: rng.chance(0.2) ? 1 : 0 });
@@ -835,25 +836,34 @@ export class WorldView {
         if (t > 0 && lat < 14) nearRoad = true;
       }
       if (nearRoad) continue;
-      spots.push({ x, y, s: rng.range(0.9, 1.6), kind: rng.chance(0.45) ? 1 : 0 });
+      spots.push({ x, y, s: rng.range(0.9, 1.6), kind: rng.chance(0.45) ? 1 : 2, forest: true });
     }
-    const decid = treeGeometry(0);
-    const conif = treeGeometry(1);
-    for (const kind of [0, 1]) {
-      const list = spots.filter((s) => s.kind === kind);
-      if (!list.length) continue;
-      const mesh = new THREE.InstancedMesh(kind === 0 ? decid : conif, this.mats.tree, list.length);
-      const m = new THREE.Matrix4();
-      const q = new THREE.Quaternion();
-      const col = new THREE.Color();
+    // one instanced mesh per kind and map cell, so the camera and the shadow
+    // pass can frustum-cull whole patches of trees
+    const geos = [treeGeometry(0), treeGeometry(1), treeGeometry(2)];
+    const cells = new Map<string, typeof spots>();
+    for (const t of spots) {
+      const cs = t.forest ? 560 : 240;
+      const key = `${t.kind}|${t.forest ? 1 : 0}|${Math.floor(t.x / cs)}|${Math.floor(t.y / cs)}`;
+      let list = cells.get(key);
+      if (!list) cells.set(key, (list = []));
+      list.push(t);
+    }
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const col = new THREE.Color();
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const list of cells.values()) {
+      const mesh = new THREE.InstancedMesh(geos[list[0].kind], this.mats.tree, list.length);
       list.forEach((t, i) => {
-        q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), rng.range(0, Math.PI * 2));
+        q.setFromAxisAngle(up, rng.range(0, Math.PI * 2));
         m.compose(new THREE.Vector3(t.x, Y_WALK, t.y), q, new THREE.Vector3(t.s, t.s * rng.range(0.9, 1.15), t.s));
         mesh.setMatrixAt(i, m);
         const tint = rng.range(0.75, 1.15);
         col.setRGB(tint * rng.range(0.9, 1.05), tint, tint * rng.range(0.85, 1.0));
         mesh.setColorAt(i, col);
       });
+      mesh.computeBoundingSphere();
       mesh.castShadow = this.quality.shadows;
       mesh.receiveShadow = false;
       this.group.add(mesh);
@@ -1185,12 +1195,15 @@ function treeGeometry(kind: number): THREE.BufferGeometry {
   g.setColor(0x5b4430);
   g.box(0, 0, 0, 0.35, 2.4, 0.35, 1, 0);
   const geoms: THREE.BufferGeometry[] = [g.build()];
-  if (kind === 0) {
-    const crowns: [number, number, number, number][] = [
-      [0, 3.6, 0, 2.2],
-      [0.7, 3.1, 0.4, 1.5],
-      [-0.6, 3.3, -0.5, 1.6],
-    ];
+  if (kind === 0 || kind === 2) {
+    const crowns: [number, number, number, number][] =
+      kind === 0
+        ? [
+            [0, 3.6, 0, 2.2],
+            [0.7, 3.1, 0.4, 1.5],
+            [-0.6, 3.3, -0.5, 1.6],
+          ]
+        : [[0, 3.5, 0, 2.4]];
     for (const [x, y, z, r] of crowns) {
       const s = new THREE.IcosahedronGeometry(r, 1);
       s.scale(1, 0.85, 1);

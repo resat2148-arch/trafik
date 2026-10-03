@@ -31,7 +31,6 @@ const STR = {
   low: { en: 'Low', tr: 'Düşük' },
   medium: { en: 'Medium', tr: 'Orta' },
   high: { en: 'High', tr: 'Yüksek' },
-  qualityNote: { en: 'Graphics changes apply on the next city load.', tr: 'Grafik değişikliği bir sonraki şehir yüklemesinde uygulanır.' },
   resetProgress: { en: 'Reset progress', tr: 'İlerlemeyi sıfırla' },
   confirmReset: { en: 'Erase all progress?', tr: 'Tüm ilerleme silinsin mi?' },
   // HUD
@@ -191,6 +190,7 @@ const STR = {
   help5: { en: 'Grades A-F show junction delay. Red roads on the traffic layer are jammed.', tr: 'A-F notları kavşak gecikmesini gösterir. Trafik katmanında kırmızı yollar tıkalıdır.' },
   help6: { en: 'Clear accidents fast with tow trucks. If satisfaction hits zero, you are fired!', tr: 'Kazaları çekiciyle hızlıca temizle. Memnuniyet sıfıra düşerse kovulursun!' },
   controls: { en: 'Controls', tr: 'Kontroller' },
+  qualityAuto: { en: 'Graphics lowered for smoother play. You can change it in Settings.', tr: 'Daha akıcı oyun için grafik kalitesi düşürüldü. Ayarlardan değiştirebilirsin.' },
   ctrlHelp: { en: 'Drag: pan · Wheel/pinch: zoom · Right-drag / Q,E: rotate · Space: pause · 1-3: speed · T: traffic layer · L: grades · Esc: menu', tr: 'Sürükle: kaydır · Tekerlek/iki parmak: yakınlaş · Sağ sürükle / Q,E: döndür · Boşluk: duraklat · 1-3: hız · T: trafik katmanı · L: notlar · Esc: menü' },
   advisor: { en: 'Advisor', tr: 'Danışman' },
   tipSignalSplit: { en: 'Tip: one approach of {r} has a long queue. Give its phase more green time.', tr: 'İpucu: {r} kavşağında bir kolda uzun kuyruk var. O faza daha uzun yeşil ver.' },

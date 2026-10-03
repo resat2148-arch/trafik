@@ -145,6 +145,13 @@ export class Game {
     return mobile ? 'low' : cores >= 8 ? 'high' : 'medium';
   }
 
+  applyQuality(level: QualityLevel, manual = true): void {
+    this.save.quality = level;
+    if (manual) this.save.qualityManual = true;
+    storeSave(this.save, true);
+    this.renderer.setQuality(level, this.sim ?? null, this.day);
+  }
+
   initRenderer(container: HTMLElement): void {
     this.renderer = new GameRenderer(container, this.quality());
     this.renderer.rig.onClick = (x, y) => this.pick(x, y);

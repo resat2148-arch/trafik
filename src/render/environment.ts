@@ -58,15 +58,7 @@ export class Environment {
     this.hemi = new THREE.HemisphereLight(0xcfe2f2, 0x67645a, 1.0);
     scene.add(this.hemi);
     this.sun = new THREE.DirectionalLight(0xffffff, 2.5);
-    this.sun.castShadow = shadows;
-    if (shadows) {
-      this.sun.shadow.mapSize.set(shadowRes, shadowRes);
-      this.sun.shadow.bias = -0.0004;
-      this.sun.shadow.normalBias = 0.04;
-      this.sun.shadow.camera.near = 1;
-      this.sun.shadow.camera.far = 900;
-      this.sun.shadow.radius = 2;
-    }
+    this.setShadows(shadows, shadowRes);
     scene.add(this.sun);
     scene.add(this.sun.target);
     this.fog = new THREE.Fog(0xbcd3e2, 600, 2400);
@@ -131,6 +123,22 @@ export class Environment {
     sc.bottom = -this.shadowSize;
     sc.updateProjectionMatrix();
     this.updateRain(dt, camPos, target);
+  }
+
+  setShadows(on: boolean, res: number): void {
+    this.sun.castShadow = on;
+    if (!on) return;
+    const sh = this.sun.shadow;
+    if (sh.mapSize.x !== res) {
+      sh.mapSize.set(res, res);
+      sh.map?.dispose();
+      sh.map = null;
+    }
+    sh.bias = -0.0004;
+    sh.normalBias = 0.04;
+    sh.camera.near = 1;
+    sh.camera.far = 900;
+    sh.radius = 2;
   }
 
   nightFrom(hour: number): number {

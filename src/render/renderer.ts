@@ -39,12 +39,14 @@ export class GameRenderer {
   tex: TextureSet;
   city: City | null = null;
   quality: Quality & { shadowRes: number };
+  level: QualityLevel;
   container: HTMLElement;
   private lastW = 0;
   private lastH = 0;
 
   constructor(container: HTMLElement, level: QualityLevel) {
     this.container = container;
+    this.level = level;
     this.quality = qualityPreset(level);
     this.renderer = new THREE.WebGLRenderer({ antialias: level !== 'low', powerPreference: 'high-performance', stencil: false });
     this.renderer.setPixelRatio(this.quality.pixelRatio);
@@ -88,6 +90,24 @@ export class GameRenderer {
     this.rig.maxDist = Math.max(500, span * 1.35);
     this.rig.focus(city.center.x, city.center.y, span * 0.75, true);
     void sim;
+  }
+
+  /** switch graphics quality live (antialiasing stays as created) */
+  setQuality(level: QualityLevel, sim: Sim | null, day: number): void {
+    this.level = level;
+    this.quality = qualityPreset(level);
+    this.renderer.setPixelRatio(this.quality.pixelRatio);
+    this.renderer.shadowMap.enabled = this.quality.shadows;
+    this.renderer.shadowMap.needsUpdate = true;
+    this.env.setShadows(this.quality.shadows, this.quality.shadowRes);
+    this.lastW = 0;
+    this.resize();
+    if (!this.city || !sim) return;
+    const rig = this.rig;
+    const target = rig.target.clone();
+    const dist = rig.dist;
+    this.setCity(this.city, sim, day);
+    rig.focus(target.x, target.z, dist, true);
   }
 
   resize(): void {
