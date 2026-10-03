@@ -43,9 +43,9 @@ export const ALL_UNLOCKS: Unlock[] = [
 /** first city teaches tools gradually; later cities start with everything */
 export const TUTORIAL_UNLOCKS: Record<number, Unlock[]> = {
   1: ['signal', 'allstop', 'priority', 'timing'],
-  2: ['arrows', 'box', 'rtor'],
+  2: ['arrows', 'box', 'rtor', 'restripe'],
   3: ['roundabout'],
-  4: ['restripe', 'speed', 'bus'],
+  4: ['speed', 'bus'],
   5: ['actuated', 'smart', 'greenwave', 'policies', 'preempt'],
 };
 
@@ -74,6 +74,7 @@ export const COST = {
   arrows: 200,
   box: 400,
   restripe: 1200,
+  widen: 4000, // per added lane: widening rebuilds the carriageway and corners
   speed: 100,
   bus: 800,
   tow: 250,

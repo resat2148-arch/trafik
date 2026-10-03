@@ -9,7 +9,7 @@ import { arcPoints, circlePoints, offsetClosed, signedArea, simplifyClosed } fro
 import { Path } from '../core/path.ts';
 import type { City, Building, Block } from '../world/citygen.ts';
 import { blockCurb, cornerPoints, faceWalk, waterBlockLand } from '../world/citygen.ts';
-import { ARROW_L, ARROW_R, ARROW_S, ARROW_U, CROSSWALK_W, SIG_G, SIG_P, SIG_R, SIG_Y } from '../sim/network.ts';
+import { ARROW_L, ARROW_R, ARROW_S, ARROW_U, CROSSWALK_W, ROAD_SPECS, SIG_G, SIG_P, SIG_R, SIG_Y } from '../sim/network.ts';
 import type { Arm, Conn, Lane, Node, Road } from '../sim/network.ts';
 import { GeoBuilder } from './geo.ts';
 import type { TextureSet } from './textures.ts';
@@ -787,8 +787,15 @@ export class WorldView {
     // kind: 0 broadleaf, 1 conifer, 2 lighter broadleaf for the countryside
     const spots: { x: number; y: number; s: number; kind: number; forest?: boolean }[] = [];
     const dens = this.quality.trees;
+    // widened roads took part of the old verge: keep the new sidewalk clear of trees
+    const wide = c.net.roads.filter((r) => r.maxLanes > ROAD_SPECS[r.cls].maxLanes);
+    const onRoad = (x: number, y: number): boolean => wide.some((r) => r.center.project(x, y).d < r.width / 2 + 2.4);
     for (const b of c.blocks) {
-      for (const t of b.trees) if (rng.next() < dens) spots.push({ x: t.x, y: t.y, s: rng.range(0.8, 1.35), kind: rng.chance(0.2) ? 1 : 0 });
+      for (const t of b.trees) {
+        if (rng.next() >= dens) continue;
+        const spot = { x: t.x, y: t.y, s: rng.range(0.8, 1.35), kind: rng.chance(0.2) ? 1 : 0 };
+        if (!wide.length || !onRoad(t.x, t.y)) spots.push(spot);
+      }
     }
     // street trees along local streets and boulevard medians
     for (const r of c.net.roads) {

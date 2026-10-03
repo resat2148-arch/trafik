@@ -525,11 +525,36 @@ export function computeCorners(n: Node): void {
   n.maxRoundaboutR = isJunction ? minTrim - 1.0 : 0;
 }
 
+/** width of one lane slot of a road (its class' standard lane width) */
+export function laneWidthOf(r: Road): number {
+  const s = ROAD_SPECS[r.cls];
+  return (s.width - s.median) / s.maxLanes;
+}
+
+/** the widest a road may be built: two lane slots more than its class standard */
+export function maxSlotsOf(r: Road): number {
+  return ROAD_SPECS[r.cls].maxLanes + 2;
+}
+
+/** lane slots needed to carry the given lane counts (divided roads keep both halves equal) */
+export function slotsFor(r: Road, ab: number, ba: number): number {
+  return r.median > 0 ? 2 * Math.max(ab, ba) : ab + ba;
+}
+
+/** Change the physical width of a road to a number of lane slots. Corners and lanes are rebuilt by the caller. */
+export function setRoadSlots(r: Road, slots: number): void {
+  r.maxLanes = slots;
+  r.width = r.median + slots * laneWidthOf(r);
+  if (r.armA) r.armA.hw = r.width / 2;
+  if (r.armB) r.armB.hw = r.width / 2;
+}
+
 /** (Re)build lanes for both directions of a road from its current lane configuration. */
 export function buildLanes(r: Road): void {
   const nTot = r.lanesAB + r.lanesBA;
   const usable = r.width - r.median;
-  const w = nTot > 0 ? usable / nTot : usable;
+  // a median splits the carriageway in two halves: lanes of each direction share their own half
+  const w = r.median > 0 ? usable / 2 / Math.max(1, r.lanesAB, r.lanesBA) : nTot > 0 ? usable / nTot : usable;
   const s0 = r.armA.trim;
   const s1 = r.length - r.armB.trim;
   const base = r.center.sub(s0, Math.max(s0 + 1, s1));

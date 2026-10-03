@@ -54,6 +54,10 @@ const ctrl: Record<string, number> = {};
 for (const n of city.net.nodes) ctrl[n.control] = (ctrl[n.control] ?? 0) + 1;
 console.log('controls', JSON.stringify(ctrl), 'bus lines', city.busLines.length);
 
+// --widen=T: at sim time T widen every road by one lane (two on divided roads) while traffic runs
+const widenArg = process.argv.find((a) => a.startsWith('--widen='));
+const widenAt = widenArg ? Number(widenArg.split('=')[1]) : -1;
+
 const dt = 1 / 30;
 let overlaps = 0;
 let zoneViolations = 0;
@@ -69,6 +73,18 @@ const worstOverlap: string[] = [];
 const timeUse: Record<string, number> = {};
 
 for (let t = 0; t < secs; t += dt) {
+  if (widenAt >= 0 && t >= widenAt && t - dt < widenAt) {
+    let widened = 0;
+    const vBefore = sim.vehicles.length;
+    for (const r of city.net.roads) {
+      if (r.bridge) continue;
+      const div = r.median > 0;
+      const ab = r.lanesAB + (div || r.id % 2 === 0 ? 1 : 0);
+      const ba = r.lanesBA + (div || r.id % 2 === 1 ? 1 : 0);
+      if (sim.reshapeRoad(r, r.maxLanes + (div ? 2 : 1), ab, ba)) widened++;
+    }
+    console.log(`widened ${widened}/${city.net.roads.length} roads at t=${t.toFixed(1)}, vehicles ${vBefore} -> ${sim.vehicles.length}`);
+  }
   const hour = hourAt(t);
   demand.update(dt, hour);
   sim.step(dt);

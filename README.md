@@ -37,7 +37,7 @@ mutlu tutmalısın — memnuniyet sıfıra düşerse kovulursun.
 | Kırmızıda sağa dönüş, sarı kutu | Kavşak tıkamayı önler |
 | Göbekli kavşak | Döner kavşak (girişte yol ver, ada, ayırıcı adalar) |
 | Şerit okları | Her şeridin dönüş izinleri (ayrı sol/sağ dönüş şeritleri) |
-| Şerit sayısı / tek yön | Yolu yeniden çizgile (bağlantı kopacaksa reddedilir) |
+| Şerit ekle / tek yön | Yolu yeniden çizgile; yol doluysa şerit başına $4.000'a genişletilir (köprüler, kenarında bina olan yollar ve çok kısa yollar genişletilemez; bağlantı kopacaksa reddedilir) |
 | Hız sınırı, otobüs şeridi | Yol bazında |
 | Politikalar | Esnek çalışma saatleri, ücretsiz toplu taşıma, trafik güvenliği kampanyası, acil araç sinyal önceliği |
 | Çekici / polis | Kazaları ve kilitlenmiş araçları temizler |

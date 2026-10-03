@@ -24,6 +24,8 @@ import {
   SIG_Y,
   buildLanes,
   clampLaneCounts,
+  computeCorners,
+  setRoadSlots,
 } from './network.ts';
 import type { Control, Road } from './network.ts';
 import { buildJunction, cleanupDying, stronglyConnected, updateLinkNexts } from './junction.ts';
@@ -84,6 +86,13 @@ export function timeToCover(d: number, v: number, a: number, vmax: number): numb
 }
 
 const tmpPose = { x: 0, y: 0, dx: 1, dy: 0 };
+
+interface LaneSnapshot {
+  roads: Set<Road>;
+  lanes: Lane[];
+  vehs: { v: Vehicle; lane: Lane; s: number }[];
+  arrows: Map<Link, number[]>;
+}
 
 export class Sim {
   net: Network;
@@ -177,98 +186,175 @@ export class Sim {
   restripe(r: Road, ab: number, ba: number, busAB = r.busAB, busBA = r.busBA, speed = r.speed, test = true): boolean {
     [ab, ba] = clampLaneCounts(r, ab, ba);
     const old = { ab: r.lanesAB, ba: r.lanesBA, busAB: r.busAB, busBA: r.busBA, speed: r.speed };
-    const oldLanes = [...r.ab.lanes, ...r.ba.lanes];
-    const saved: { v: Vehicle; link: Link; off: number; frac: number }[] = [];
-    for (const l of oldLanes) for (const v of l.vehs) saved.push({ v, link: l.link, off: l.offset, frac: v.s / l.len });
+    const snap = this.snapshotLanes([r]);
+    const ends = [r.a, r.b];
+    const apply = (): void => {
+      buildLanes(r);
+      this.restoreArrows(snap);
+      for (const n of ends) buildJunction(this.net, n);
+      updateLinkNexts(this.net);
+    };
     r.lanesAB = ab;
     r.lanesBA = ba;
     r.busAB = busAB;
     r.busBA = busBA;
     r.speed = speed;
-    buildLanes(r);
-    for (const n of [r.a, r.b]) buildJunction(this.net, n);
-    updateLinkNexts(this.net);
+    apply();
     if (test && !stronglyConnected(this.net)) {
-      // revert
       r.lanesAB = old.ab;
       r.lanesBA = old.ba;
       r.busAB = old.busAB;
       r.busBA = old.busBA;
       r.speed = old.speed;
-      buildLanes(r);
-      for (const n of [r.a, r.b]) buildJunction(this.net, n);
-      updateLinkNexts(this.net);
-      this.remapAfterRestripe(r, oldLanes, saved);
+      apply();
+      this.remapLanes(snap, ends);
+      this.afterRebuild(ends);
       return false;
     }
-    this.remapAfterRestripe(r, oldLanes, saved);
-    for (const n of [r.a, r.b]) {
+    this.remapLanes(snap, ends);
+    this.afterRebuild(ends);
+    r.version++;
+    return true;
+  }
+
+  /**
+   * Widen (or narrow) a road to a number of lane slots and stripe it with ab / ba lanes.
+   * The curb corners move at both ends, so every road meeting those junctions gets new lanes
+   * and every junction those roads touch gets new connectors. Vehicles keep their place.
+   */
+  reshapeRoad(r: Road, slots: number, ab: number, ba: number, test = true): boolean {
+    const ends = [r.a, r.b];
+    const roads = new Set<Road>();
+    for (const n of ends) for (const arm of n.arms) roads.add(arm.road);
+    const nodes = new Set<Node>();
+    for (const rd of roads) {
+      nodes.add(rd.a);
+      nodes.add(rd.b);
+    }
+    const snap = this.snapshotLanes(roads);
+    const old = { slots: r.maxLanes, ab: r.lanesAB, ba: r.lanesBA };
+    const apply = (sl: number, a: number, b: number): void => {
+      setRoadSlots(r, sl);
+      [a, b] = clampLaneCounts(r, a, b);
+      r.lanesAB = a;
+      r.lanesBA = b;
+      for (const n of ends) computeCorners(n);
+      for (const rd of roads) buildLanes(rd);
+      this.restoreArrows(snap);
+      for (const n of nodes) buildJunction(this.net, n);
+      updateLinkNexts(this.net);
+    };
+    apply(slots, ab, ba);
+    const ok = !test || stronglyConnected(this.net);
+    if (!ok) apply(old.slots, old.ab, old.ba);
+    this.remapLanes(snap, nodes);
+    this.afterRebuild(nodes);
+    if (ok) for (const rd of roads) rd.version++;
+    return ok;
+  }
+
+  private afterRebuild(nodes: Iterable<Node>): void {
+    for (const n of nodes) {
       if (n.control === 'signal' && n.signal) {
         n.signal.rebuild(true);
         n.signal.safeRestart();
       }
       this.onJunctionChanged(n);
     }
-    r.version++;
-    return true;
   }
 
-  private remapAfterRestripe(r: Road, oldLanes: Lane[], saved: { v: Vehicle; link: Link; off: number; frac: number }[]): void {
-    const map = new Map<Lane, Lane | null>();
-    for (const ol of oldLanes) {
+  /** remember lanes, their vehicles and lane arrows of some roads before they are rebuilt */
+  private snapshotLanes(roads: Iterable<Road>): LaneSnapshot {
+    const snap: LaneSnapshot = { roads: new Set(roads), lanes: [], vehs: [], arrows: new Map() };
+    for (const rd of snap.roads)
+      for (const link of [rd.ab, rd.ba]) {
+        snap.arrows.set(link, link.lanes.map((l) => l.arrows));
+        for (const l of link.lanes) {
+          snap.lanes.push(l);
+          for (const v of l.vehs) snap.vehs.push({ v, lane: l, s: v.s });
+        }
+      }
+    return snap;
+  }
+
+  /** keep custom lane arrows on links whose lane count did not change */
+  private restoreArrows(snap: LaneSnapshot): void {
+    for (const [link, arr] of snap.arrows) if (link.lanes.length === arr.length) link.lanes.forEach((l, i) => (l.arrows = arr[i]));
+  }
+
+  /** move vehicles and every reference to the old lanes of a snapshot onto the rebuilt lanes */
+  private remapLanes(snap: LaneSnapshot, nodes: Iterable<Node>): void {
+    const map = new Map<Seg, Lane | null>();
+    for (const ol of snap.lanes) {
       const lanes = ol.link.lanes;
-      let best: Lane | null = null;
-      let bd = Infinity;
-      for (const nl of lanes) {
-        const d = Math.abs(nl.offset - ol.offset);
-        if (d < bd) {
-          bd = d;
-          best = nl;
+      const before = snap.arrows.get(ol.link)?.length ?? 0;
+      // same or more lanes: keep the vehicle's lane counted from the curb; fewer: nearest lane
+      let best: Lane | null = lanes.length >= before ? (lanes[ol.index] ?? null) : null;
+      if (!best) {
+        let bd = Infinity;
+        for (const nl of lanes) {
+          const d = Math.abs(nl.offset - ol.offset);
+          if (d < bd) {
+            bd = d;
+            best = nl;
+          }
         }
       }
       map.set(ol, best);
     }
-    for (const { v, off, frac } of saved) {
-      const ol = oldLanes.find((l) => l.vehs.includes(v));
-      if (ol) ol.vehs.splice(ol.vehs.indexOf(v), 1);
-      const nl = ol ? map.get(ol) : null;
+    const touched = new Set<Lane>();
+    for (const { v, lane: ol, s } of snap.vehs) {
+      ol.removeVehicle(v);
+      const nl = map.get(ol) ?? null;
       if (!nl) {
         this.removeVehicle(v, 'abandon');
         continue;
       }
+      // keep the vehicle where it physically is
+      const p = ol.path.point(clamp(s, 0, ol.len));
       v.seg = nl;
-      v.s = clamp(frac * nl.len, 0, nl.len - 0.1);
-      v.lat += (off - nl.offset) * (nl.link.forward ? 1 : -1);
+      v.s = clamp(nl.path.project(p.x, p.y).s, 0.05, nl.len - 0.1);
+      v.lat += (ol.offset - nl.offset) * (nl.link.forward ? 1 : -1);
       nl.addVehicle(v);
+      touched.add(nl);
       v.committed = null;
       v.holdLine = false;
     }
-    // fix references to old lanes inside plans, dying connectors and dest lanes
-    for (const n of [r.a, r.b]) {
+    // a lane that got shorter must not squeeze its queue into overlapping cars
+    for (const l of touched) {
+      l.resort();
+      const vs = l.vehs;
+      for (let i = vs.length - 2; i >= 0; i--) {
+        const lead = vs[i + 1];
+        const maxS = lead.s - lead.len - 0.3;
+        if (vs[i].s > maxS) vs[i].s = Math.max(0.05, maxS);
+      }
+    }
+    // connectors still carrying vehicles lead into the new lanes
+    for (const n of nodes) {
       for (const c of n.dying) {
         const to = c.outs[0];
-        if (to && to.isLane && map.has(to as Lane)) {
-          const nl = map.get(to as Lane);
-          if (nl) {
-            c.outs = [nl];
-            c.toLane = nl;
-          }
+        const nl = to ? map.get(to) : undefined;
+        if (nl) {
+          c.outs = [nl];
+          c.toLane = nl;
         }
       }
     }
     for (const v of this.vehicles) {
       if (v.state === 'gone') continue;
       for (let i = 0; i < v.plan.length; i++) {
-        const s = v.plan[i];
-        if (s.isLane && map.has(s as Lane)) {
-          const nl = map.get(s as Lane);
-          if (nl) v.plan[i] = nl;
-        }
+        const nl = map.get(v.plan[i]);
+        if (nl) v.plan[i] = nl;
+      }
+      for (let i = 0; i < v.prevSegs.length; i++) {
+        const nl = map.get(v.prevSegs[i]);
+        if (nl) v.prevSegs[i] = nl;
       }
       if (v.seg.isLane) this.planAhead(v);
       // routes through links without lanes need a new route
       if (v.route.some((l, i) => i >= v.ri && l.lanes.length === 0)) this.reroute(v, true);
-      if (v.dest && v.dest.link.road === r) this.fixDestLane(v);
+      if (v.dest && snap.roads.has(v.dest.link.road)) this.fixDestLane(v);
     }
     for (const v of this.vehicles.slice()) if (v.state === 'gone') this.vehicles.splice(this.vehicles.indexOf(v), 1);
   }

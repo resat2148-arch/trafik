@@ -5,12 +5,13 @@ import { t, money } from '../game/i18n.ts';
 import type { StrKey } from '../game/i18n.ts';
 import { COST, unlockDay } from '../game/config.ts';
 import type { Unlock } from '../game/config.ts';
-import { ROAD_SPECS, SIG_G, SIG_P, clampLaneCounts, kmh } from '../sim/network.ts';
+import { ROAD_SPECS, SIG_G, SIG_P, kmh, slotsFor } from '../sim/network.ts';
 import type { Arm, Control, Lane, Node, Road } from '../sim/network.ts';
 import type { Phase as SigPhase, PlanType, SigMode } from '../sim/signals.ts';
 import type { Vehicle } from '../sim/vehicle.ts';
 import { MODEL } from '../sim/vehicle.ts';
 import { ICON, arrowSvg, fmtSec, h, losColor, svg } from './dom.ts';
+import { Audio } from '../audio/audio.ts';
 
 function add(el: HTMLElement, ...kids: (HTMLElement | null | undefined | false)[]): void {
   for (const k of kids) if (k) el.append(k);
@@ -22,7 +23,8 @@ export class Panels {
   game: Game;
   root: HTMLElement;
   private live: (() => void)[] = [];
-  private pendingLanes: { road: Road; ab: number; ba: number } | null = null;
+  /** lane counts being edited in the road panel, and why the last + was refused */
+  private pendingLanes: { road: Road; ab: number; ba: number; note: string } | null = null;
 
   constructor(game: Game, root: HTMLElement) {
     this.game = game;
@@ -330,9 +332,9 @@ export class Panels {
       sp.textContent = `${n ? Math.round((sv / n) * 3.6) : kmh(r.speed)} ${t('speedUnit')}`;
     });
     body.append(h('div', { class: 'stats-row' }, h('div', { class: 'stat' }, h('span', null, t('vehicles')), st), h('div', { class: 'stat' }, h('span', null, t('avgSpeed')), sp)));
-    // lanes editor
+    // lanes editor: re-stripe within the current width, or widen the road for more lanes
     const lock = this.locked('restripe');
-    const pend = this.pendingLanes && this.pendingLanes.road === r ? this.pendingLanes : { road: r, ab: r.lanesAB, ba: r.lanesBA };
+    const pend = this.pendingLanes && this.pendingLanes.road === r ? this.pendingLanes : { road: r, ab: r.lanesAB, ba: r.lanesBA, note: '' };
     this.pendingLanes = pend;
     const toA = r.a.name.split(' & ').find((x) => x !== r.name) ?? r.a.name;
     const toB = r.b.name.split(' & ').find((x) => x !== r.name) ?? r.b.name;
@@ -349,10 +351,19 @@ export class Panels {
       const change = (d: number): void => {
         const nab = which === 'ab' ? pend.ab + d : pend.ab;
         const nba = which === 'ba' ? pend.ba + d : pend.ba;
-        const [a, b] = clampLaneCounts(r, nab, nba);
-        if (nab + nba > r.maxLanes || nab < 0 || nba < 0) return;
-        pend.ab = a;
-        pend.ba = b;
+        pend.note = '';
+        // a divided road keeps both directions; any road keeps at least one lane
+        const min = r.median > 0 ? 1 : 0;
+        if (nab < min || nba < min || nab + nba === 0) return;
+        const slots = slotsFor(r, nab, nba);
+        const why = slots > r.maxLanes ? g.widenBlocker(r, slots) : null;
+        if (why) {
+          pend.note = t(`widen_${why}` as StrKey);
+          Audio.error();
+        } else {
+          pend.ab = nab;
+          pend.ba = nba;
+        }
         this.render();
       };
       return h(
@@ -366,14 +377,21 @@ export class Panels {
       );
     };
     const angAB = (Math.atan2(r.b.y - r.a.y, r.b.x - r.a.x) * 180) / Math.PI + (g.renderer.rig.yaw * 180) / Math.PI;
+    const changed = pend.ab !== r.lanesAB || pend.ba !== r.lanesBA;
+    const extra = slotsFor(r, pend.ab, pend.ba) - r.maxLanes;
+    let note: HTMLElement | null = null;
+    if (lock) note = this.lockNote('restripe');
+    else if (pend.note) note = h('div', { class: 'hint bad' }, pend.note);
+    else if (changed && extra > 0) note = h('div', { class: 'hint' }, '🚧 ', extra === 1 ? t('widenNote1') : t('widenNote', { n: extra }));
+    else if (!changed) note = h('div', { class: 'hint' }, t('lanesHint', { c: money(COST.widen) }));
     add(
       body,
-      h('div', { class: 'sec-title' }, t('lanes'), h('span', { class: 'sec-extra' }, `max ${r.maxLanes}`)),
-      lock ? this.lockNote('restripe') : null,
+      h('div', { class: 'sec-title' }, t('lanes'), h('span', { class: 'sec-extra' }, t('widthM', { m: Math.round(r.width) }))),
       dirRow(`${t('towards')} ${toB}`, 'ab', angAB),
       dirRow(`${t('towards')} ${toA}`, 'ba', angAB + 180),
+      note,
     );
-    if (!lock && (pend.ab !== r.lanesAB || pend.ba !== r.lanesBA)) {
+    if (!lock && changed) {
       body.append(
         h(
           'div',
@@ -385,7 +403,7 @@ export class Panels {
               pend.ba = r.lanesBA;
             }
             this.render();
-          } }, t('apply'), h('span', { class: 'cost' }, money(COST.restripe))),
+          } }, t(extra > 0 ? 'widenApply' : 'apply'), h('span', { class: 'cost' }, money(g.restripeCost(r, pend.ab, pend.ba)))),
           h('button', { class: 'btn', onclick: () => {
             this.pendingLanes = null;
             this.render();

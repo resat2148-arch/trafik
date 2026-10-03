@@ -7,7 +7,7 @@ import type { Building, City, CityPreset } from '../world/citygen.ts';
 import { Sim } from '../sim/sim.ts';
 import type { SimEvent } from '../sim/sim.ts';
 import { Demand } from '../sim/demand.ts';
-import { ROAD_SPECS, SIG_P } from '../sim/network.ts';
+import { ROAD_SPECS, SIG_P, computeCorners, laneWidthOf, maxSlotsOf, setRoadSlots, slotsFor } from '../sim/network.ts';
 import type { Conn, Control, Lane, Link, Node, Road } from '../sim/network.ts';
 import { arrowOptions, availableBits, movementsFor, stronglyConnected } from '../sim/junction.ts';
 import type { PlanType, SigMode } from '../sim/signals.ts';
@@ -28,6 +28,8 @@ import { Platform } from '../platform/crazygames.ts';
 
 export type Phase = 'boot' | 'menu' | 'intro' | 'playing' | 'report' | 'fired' | 'complete';
 export type ToastKind = 'info' | 'warn' | 'bad' | 'good';
+/** why a road cannot be made wider */
+export type WidenBlock = 'bridge' | 'max' | 'short' | 'buildings';
 
 export interface GameUI {
   toast(msg: string, kind: ToastKind, action?: { label: string; fn: () => void }, key?: string): void;
@@ -197,6 +199,10 @@ export class Game {
 
   private applyNetwork(run: RunSave): void {
     const net = this.city.net;
+    for (const rs of run.roads) {
+      const r = net.roads[rs.id];
+      if (r && rs.slots && rs.slots !== r.maxLanes) this.sim.reshapeRoad(r, rs.slots, rs.ab, rs.ba, false);
+    }
     for (const rs of run.roads) {
       const r = net.roads[rs.id];
       if (!r) continue;
@@ -1060,20 +1066,81 @@ export class Game {
     this.afterChange();
   }
 
+  /** cost of re-striping a road to ab / ba lanes, widening it when they do not fit */
+  restripeCost(r: Road, ab: number, ba: number): number {
+    const extra = slotsFor(r, ab, ba) - r.maxLanes;
+    return extra > 0 ? extra * COST.widen : COST.restripe;
+  }
+
+  /** why the road cannot be widened to carry `slots` lanes, or null when it can */
+  widenBlocker(r: Road, slots: number): WidenBlock | null {
+    if (slots <= r.maxLanes) return null;
+    if (r.bridge) return 'bridge';
+    if (slots > maxSlotsOf(r)) return 'max';
+    // dry run of the curb corners: the streets meeting at both ends need room for a queue
+    const ends = [r.a, r.b];
+    const before = new Map<Road, number>();
+    for (const n of ends) for (const arm of n.arms) before.set(arm.road, arm.road.trimmedLength);
+    const old = r.maxLanes;
+    setRoadSlots(r, slots);
+    for (const n of ends) computeCorners(n);
+    let short = false;
+    for (const [rd, len] of before) if (rd.trimmedLength < 20 && rd.trimmedLength < len - 0.5) short = true;
+    setRoadSlots(r, old);
+    for (const n of ends) computeCorners(n);
+    if (short) return 'short';
+    // buildings and car parks keep at least a narrow sidewalk
+    const need = (r.median + slots * laneWidthOf(r)) / 2 + 1.5;
+    const near = (cx: number, cy: number, hw: number, hh: number, ux: number, uy: number): boolean => {
+      if (r.center.project(cx, cy).d > need + Math.hypot(hw, hh)) return false;
+      const vx = -uy;
+      const vy = ux;
+      const steps = Math.max(2, Math.ceil(Math.max(hw, hh)));
+      for (let i = 0; i <= steps; i++) {
+        const f = (i / steps) * 2 - 1;
+        const pts = [
+          [cx + ux * hw * f + vx * hh, cy + uy * hw * f + vy * hh],
+          [cx + ux * hw * f - vx * hh, cy + uy * hw * f - vy * hh],
+          [cx + ux * hw + vx * hh * f, cy + uy * hw + vy * hh * f],
+          [cx - ux * hw + vx * hh * f, cy - uy * hw + vy * hh * f],
+        ];
+        for (const [x, y] of pts) if (r.center.project(x, y).d < need) return true;
+      }
+      return false;
+    };
+    for (const b of this.city.buildings) if (near(b.x, b.y, b.w / 2, b.d / 2, b.ux, b.uy)) return 'buildings';
+    for (const bl of this.city.blocks) for (const pk of bl.parking) if (near(pk.cx, pk.cy, pk.hw, pk.hh, pk.ux, pk.uy)) return 'buildings';
+    return null;
+  }
+
   restripe(r: Road, ab: number, ba: number): boolean {
     if (ab === r.lanesAB && ba === r.lanesBA) return true;
-    if (!this.canAfford(COST.restripe)) {
-      this.pay(COST.restripe);
+    const slots = Math.max(r.maxLanes, slotsFor(r, ab, ba));
+    const widen = slots > r.maxLanes;
+    const why = widen ? this.widenBlocker(r, slots) : null;
+    if (why) {
+      Audio.error();
+      this.ui?.toast(t(`widen_${why}` as StrKey), 'warn');
       return false;
     }
-    const ok = this.sim.restripe(r, ab, ba);
+    const cost = this.restripeCost(r, ab, ba);
+    if (!this.canAfford(cost)) {
+      this.pay(cost);
+      return false;
+    }
+    const ok = widen ? this.sim.reshapeRoad(r, slots, ab, ba) : this.sim.restripe(r, ab, ba);
     if (!ok) {
       Audio.error();
       this.ui?.toast(t('wouldDisconnect'), 'warn');
       return false;
     }
-    this.pay(COST.restripe, (r.a.x + r.b.x) / 2, (r.a.y + r.b.y) / 2);
-    this.afterRoadChange(r);
+    this.pay(cost, (r.a.x + r.b.x) / 2, (r.a.y + r.b.y) / 2);
+    if (widen) {
+      // the carriageway, its corners and everything along the curb move
+      this.renderer.rebuildWorld(this.day);
+      this.ui?.toast(t('widened', { r: r.name }), 'good');
+    }
+    this.afterRoadChange(r, !widen);
     return true;
   }
 
@@ -1094,8 +1161,8 @@ export class Game {
     this.afterRoadChange(r);
   }
 
-  private afterRoadChange(r: Road): void {
-    this.renderer.world.refresh();
+  private afterRoadChange(r: Road, refresh = true): void {
+    if (refresh) this.renderer.world.refresh();
     this.renderer.overlays.buildTraffic(this.city.net);
     this.renderer.overlays.setSelection({ kind: 'road', road: r });
     this.afterChange();

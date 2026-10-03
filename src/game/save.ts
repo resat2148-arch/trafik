@@ -18,6 +18,8 @@ export interface NodeSave {
 
 export interface RoadSave {
   id: number;
+  /** lane slots (physical width); missing in saves made before roads could be widened */
+  slots?: number;
   ab: number;
   ba: number;
   speed: number;
@@ -125,7 +127,7 @@ export function snapshotNetwork(net: Network): Pick<RunSave, 'nodes' | 'roads' |
       rtor: n.rtor,
       signal: n.signal ? n.signal.save() : undefined,
     }));
-  const roads: RoadSave[] = net.roads.map((r) => ({ id: r.id, ab: r.lanesAB, ba: r.lanesBA, speed: r.speed, busAB: r.busAB, busBA: r.busBA }));
+  const roads: RoadSave[] = net.roads.map((r) => ({ id: r.id, slots: r.maxLanes, ab: r.lanesAB, ba: r.lanesBA, speed: r.speed, busAB: r.busAB, busBA: r.busBA }));
   const arrows: [number, number, number][] = [];
   for (const l of net.links) for (const lane of l.lanes) arrows.push([l.id, lane.index, lane.arrows]);
   return { nodes, roads, arrows };

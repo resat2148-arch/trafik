@@ -64,14 +64,31 @@ export class GameRenderer {
     this.resize();
   }
 
+  private disposeWorld(): void {
+    if (!this.world) return;
+    this.scene.remove(this.world.group);
+    // geometry and materials belong to this world view; textures are shared and stay
+    this.world.group.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.geometry) m.geometry.dispose();
+      const mat = m.material;
+      if (mat) for (const x of Array.isArray(mat) ? mat : [mat]) x.dispose();
+    });
+  }
+
+  /** rebuild the static world after its geometry changed (a road was widened) */
+  rebuildWorld(day: number): void {
+    if (!this.city) return;
+    this.disposeWorld();
+    this.world = new WorldView(this.city, this.tex, this.quality);
+    this.world.build(day);
+    this.scene.add(this.world.group);
+    this.peds?.build(this.city);
+    this.overlays.buildTraffic(this.city.net);
+  }
+
   setCity(city: City, sim: Sim, day: number): void {
-    if (this.world) {
-      this.scene.remove(this.world.group);
-      this.world.group.traverse((o) => {
-        const m = o as THREE.Mesh;
-        if (m.geometry) m.geometry.dispose();
-      });
-    }
+    this.disposeWorld();
     if (this.vehicles) this.scene.remove(this.vehicles.group);
     this.city = city;
     this.world = new WorldView(city, this.tex, this.quality);

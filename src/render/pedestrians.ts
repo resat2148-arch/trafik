@@ -71,7 +71,7 @@ export class Pedestrians {
       if (bl.water) continue;
       const curb = bl.curb;
       const sign = signedArea(curb) > 0 ? 1 : -1;
-      const mid = offsetClosed(curb, 1.5 * sign);
+      const mid = offsetClosed(curb, 1.2 * sign);
       const cum: number[] = [0];
       for (let i = 1; i <= mid.length; i++) {
         const a = mid[i - 1];
@@ -142,7 +142,7 @@ export class Pedestrians {
       const bob = w.pause > 0 ? 0 : Math.abs(Math.sin(w.phase)) * 0.05;
       this.q.setFromAxisAngle(this.up, Math.atan2(-hy, hx));
       // keep to the right of the walking direction
-      const off = 0.45;
+      const off = 0.32;
       this.p.set(x - hy * off, 0.16 + bob, y + hx * off);
       this.m.compose(this.p, this.q, this.sc);
       this.body.setMatrixAt(n, this.m);

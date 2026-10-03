@@ -94,7 +94,8 @@ export class Router {
     // drivers prefer the arterial network: local streets feel slower (parked cars,
     // pedestrians, traffic calming), wide roads feel faster
     const cls = l.road.cls;
-    c *= cls === 'local' ? 1.32 : cls === 'boulevard' ? 0.92 : 1;
+    // a local street widened to two lanes each way works like an avenue
+    c *= cls === 'local' && l.road.maxLanes < 4 ? 1.32 : cls === 'boulevard' ? 0.92 : 1;
     if (o.noise && o.seed !== undefined) {
       const h = Math.imul(o.seed ^ (l.id * 2654435761), 0x45d9f3b) >>> 0;
       c *= 1 + ((h % 1000) / 1000 - 0.5) * 2 * o.noise;
