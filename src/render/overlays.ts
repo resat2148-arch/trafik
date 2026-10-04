@@ -184,8 +184,9 @@ export class Overlays {
       const gb = new GeoBuilder();
       gb.setRGB(0.2, 0.8, 1);
       const pts = r.center.sub(r.armA.trim, r.length - r.armB.trim).points();
-      gb.ribbon(pts, 0.5, 0.09, -r.width / 2 - 0.2);
-      gb.ribbon(pts, 0.5, 0.09, r.width / 2 + 0.2);
+      // along both curbs, just above the sidewalks so raised kerbs never hide it
+      gb.ribbon(pts, 0.5, 0.21, -r.width / 2);
+      gb.ribbon(pts, 0.5, 0.21, r.width / 2);
       this.roadSel = new THREE.Mesh(gb.build(), new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, transparent: true, opacity: 0.9, depthWrite: false }));
       this.roadSel.renderOrder = 5;
       this.group.add(this.roadSel);

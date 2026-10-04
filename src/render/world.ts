@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import type { V2 } from '../core/math.ts';
 import { clamp, dist, normAngle, right } from '../core/math.ts';
 import { RNG } from '../core/rng.ts';
-import { arcPoints, circlePoints, offsetClosed, signedArea, simplifyClosed } from '../core/geom.ts';
+import { arcPoints, circlePoints, clipHalfPlane, offsetClosed, signedArea, simplifyClosed } from '../core/geom.ts';
 import { Path } from '../core/path.ts';
 import type { City, Building, Block } from '../world/citygen.ts';
 import { blockCurb, cornerPoints, faceWalk, waterBlockLand } from '../world/citygen.ts';
@@ -15,8 +15,15 @@ import { GeoBuilder } from './geo.ts';
 import type { TextureSet } from './textures.ts';
 import { FACADE, FACADE_COUNT, FACADE_TILE } from './textures.ts';
 
+// surface heights: layers that may overlap are kept well apart so that they never
+// fight in the depth buffer, even at a distance or on low-precision GPUs
+const Y_GROUND = -0.12;
 const Y_MARK = 0.025;
 const Y_WALK = 0.16;
+/** decals lying on sidewalks / lots (car parks, median grass, building sites) */
+const Y_ON_WALK = Y_WALK + 0.03;
+/** bridge sidewalks and river coping sit just above the land sidewalks they meet */
+const Y_EDGE = Y_WALK + 0.02;
 
 export interface Quality {
   shadows: boolean;
@@ -158,7 +165,7 @@ export class WorldView {
           { x: S, y: river.yTop },
           { x: -S, y: river.yTop },
         ],
-        -0.03,
+        Y_GROUND,
         0.05,
       );
       gb.polygon(
@@ -168,7 +175,7 @@ export class WorldView {
           { x: S, y: S },
           { x: -S, y: S },
         ],
-        -0.03,
+        Y_GROUND,
         0.05,
       );
     } else {
@@ -179,7 +186,7 @@ export class WorldView {
           { x: S, y: S },
           { x: -S, y: S },
         ],
-        -0.03,
+        Y_GROUND,
         0.05,
       );
     }
@@ -200,15 +207,49 @@ export class WorldView {
       const water = new THREE.Mesh(wb.build(false), this.waterMat!);
       water.receiveShadow = this.quality.shadows;
       this.group.add(water);
-      // embankment walls
+      // embankment walls and stone coping, interrupted where bridges leave the banks
       const eb = new GeoBuilder();
-      eb.setColor(0x9b968d);
-      eb.quad(-S, -1.8, river.yTop, S, -1.8, river.yTop, S, 0.15, river.yTop, -S, 0.15, river.yTop, 0, 0, 1);
-      eb.quad(-S, -1.8, river.yBot, S, -1.8, river.yBot, S, 0.15, river.yBot, -S, 0.15, river.yBot, 0, 0, -1);
-      // stone coping
-      eb.setColor(0xc9c3b8);
-      eb.quad(-S, 0.16, river.yTop - 0.6, S, 0.16, river.yTop - 0.6, S, 0.16, river.yTop, -S, 0.16, river.yTop, 0, 1, 0);
-      eb.quad(-S, 0.16, river.yBot, S, 0.16, river.yBot, S, 0.16, river.yBot + 0.6, -S, 0.16, river.yBot + 0.6, 0, 1, 0);
+      for (const [y, side] of [
+        [river.yTop, 1],
+        [river.yBot, -1],
+      ] as const) {
+        const gaps: [number, number][] = [];
+        for (const r of c.net.roads) {
+          if (!r.bridge) continue;
+          const a = r.center.start();
+          const b = r.center.end();
+          const t = (y - a.y) / (b.y - a.y || 1);
+          const x = a.x + (b.x - a.x) * t;
+          // just inside the deck edge (wider along the bank when the bridge crosses at an
+          // angle), so walls and coping tuck under the deck instead of leaving a slit of water
+          const sin = Math.abs(b.y - a.y) / (dist(a, b) || 1);
+          const hw = (r.width / 2 + r.sidewalk + 0.25) / Math.max(0.3, sin);
+          gaps.push([x - hw, x + hw]);
+        }
+        gaps.sort((g, h) => g[0] - h[0]);
+        let x0 = -S;
+        const runs: [number, number][] = [];
+        for (const [g0, g1] of gaps) {
+          if (g0 > x0) runs.push([x0, g0]);
+          x0 = Math.max(x0, g1);
+        }
+        runs.push([x0, S]);
+        // below the bridge decks the wall runs on unbroken, closing the bank under each bridge
+        eb.setColor(0x9b968d);
+        for (const [g0, g1] of gaps) {
+          if (side > 0) eb.quad(g0, -1.8, y, g1, -1.8, y, g1, -1.25, y, g0, -1.25, y, 0, 0, 1);
+          else eb.quad(g1, -1.8, y, g0, -1.8, y, g0, -1.25, y, g1, -1.25, y, 0, 0, -1);
+        }
+        for (const [xa, xb] of runs) {
+          eb.setColor(0x9b968d);
+          if (side > 0) eb.quad(xa, -1.8, y, xb, -1.8, y, xb, Y_EDGE, y, xa, Y_EDGE, y, 0, 0, 1);
+          else eb.quad(xb, -1.8, y, xa, -1.8, y, xa, Y_EDGE, y, xb, Y_EDGE, y, 0, 0, -1);
+          eb.setColor(0xc9c3b8);
+          const yIn = y - 0.6 * side;
+          if (side > 0) eb.quad(xa, Y_EDGE, yIn, xb, Y_EDGE, yIn, xb, Y_EDGE, y, xa, Y_EDGE, y, 0, 1, 0);
+          else eb.quad(xa, Y_EDGE, y, xb, Y_EDGE, y, xb, Y_EDGE, yIn, xa, Y_EDGE, yIn, 0, 1, 0);
+        }
+      }
       this.add(new THREE.Mesh(eb.build(), this.mats.plain), false, true);
     }
   }
@@ -286,24 +327,34 @@ export class WorldView {
       const L = dist(a, b);
       const dx = (b.x - a.x) / L;
       const dy = (b.y - a.y) / L;
-      const cx = (a.x + b.x) / 2;
-      const cy = (a.y + b.y) / 2;
+      // the deck spans the water from bank to bank, running under a junction that reaches out
+      // over the water; sidewalks and railings stop where the junctions begin
+      const tAt = (y: number): number => (y - a.y) / (b.y - a.y || 1);
+      const d0 = Math.min(tAt(river.yTop - 1.2), tAt(river.yBot + 1.2));
+      const d1 = Math.max(tAt(river.yTop - 1.2), tAt(river.yBot + 1.2));
+      const t0 = Math.max(d0, r.armA.trim / L);
+      const t1 = Math.min(d1, 1 - r.armB.trim / L);
+      const at = (t: number): V2 => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
       const w = r.width + 2 * r.sidewalk;
+      // deck slab, its top a little below the asphalt it carries
+      const dm = at((d0 + d1) / 2);
       gb.setColor(0xb8b2a8);
-      // deck slab below road level
-      gb.box(cx, -1.25, cy, L, 1.25, w + 0.6, dx, dy);
-      // sidewalks on the bridge
-      const rx = -dy;
-      const ry = dx;
-      gb.setColor(0xc9c5bd);
-      for (const side of [-1, 1]) {
-        const off = (r.width / 2 + r.sidewalk / 2) * side;
-        gb.box(cx + rx * off, 0, cy + ry * off, L, Y_WALK, r.sidewalk, dx, dy);
-        // parapet / railing
-        const po = (w / 2 + 0.1) * side;
-        gb.setColor(0x7c7f84);
-        gb.box(cx + rx * po, Y_WALK, cy + ry * po, L, 1.0, 0.25, dx, dy);
-        gb.setColor(0xc9c5bd);
+      gb.box(dm.x, -1.3, dm.y, (d1 - d0) * L, 1.25, w + 0.6, dx, dy);
+      if (t1 > t0) {
+        const Ls = (t1 - t0) * L;
+        const { x: cx, y: cy } = at((t0 + t1) / 2);
+        // sidewalks on the bridge
+        const rx = -dy;
+        const ry = dx;
+        for (const side of [-1, 1]) {
+          const off = (r.width / 2 + r.sidewalk / 2) * side;
+          gb.setColor(0xc9c5bd);
+          gb.box(cx + rx * off, 0, cy + ry * off, Ls, Y_EDGE, r.sidewalk, dx, dy);
+          // parapet / railing, standing on the deck
+          const po = (w / 2 + 0.1) * side;
+          gb.setColor(0x7c7f84);
+          gb.box(cx + rx * po, -0.05, cy + ry * po, Ls, Y_EDGE + 1.05, 0.25, dx, dy);
+        }
       }
       // piers
       gb.setColor(0x9e988e);
@@ -385,7 +436,7 @@ export class WorldView {
         for (const lane of lanes) {
           if (!lane.busOnly) continue;
           gb.setColor(0xa33a2e);
-          gb.ribbon(lane.path.points(), lane.width - 0.3, Y_MARK - 0.004);
+          gb.ribbon(lane.path.points(), lane.width - 0.3, Y_MARK - 0.012);
           gb.setColor(WHITE);
           gb.ribbon(lane.path.offset(-lane.width / 2 + 0.15).points(), 0.22, Y_MARK);
         }
@@ -520,7 +571,7 @@ export class WorldView {
           { x: pk.cx + pk.ux * pk.hw - pk.uy * pk.hh, y: pk.cy + pk.uy * pk.hw + pk.ux * pk.hh },
           { x: pk.cx - pk.ux * pk.hw - pk.uy * pk.hh, y: pk.cy - pk.uy * pk.hw + pk.ux * pk.hh },
         ];
-        parking.polygon(pts, Y_WALK + 0.01, 0.12);
+        parking.polygon(pts, Y_ON_WALK, 0.12);
       }
     }
     // boulevard medians
@@ -536,7 +587,14 @@ export class WorldView {
       walk.setColor(0x9a978f);
       walk.walls(poly, -0.02, Y_WALK, true, 0.5, 0.5, signedArea(poly) > 0 ? 1 : -1);
       walk.setColor(0xffffff);
-      grass.polygon(simplifyClosed(offsetClosed(poly, signedArea(poly) > 0 ? 0.4 : -0.4)), Y_WALK + 0.01, 0.06);
+      grass.polygon(simplifyClosed(offsetClosed(poly, signedArea(poly) > 0 ? 0.4 : -0.4)), Y_ON_WALK, 0.06);
+      walk.polygon(poly, Y_WALK, 0.25);
+    }
+    // bridge heads: pavement beside a junction that reaches out over the water, resting on the deck
+    for (const poly of this.bridgeHeads()) {
+      walk.setColor(0x9a978f);
+      walk.walls(poly, -0.06, Y_WALK, true, 0.5, 0.5, 1);
+      walk.setColor(0xffffff);
       walk.polygon(poly, Y_WALK, 0.25);
     }
     const mk = (g: GeoBuilder, m: THREE.Material, color: boolean): void => {
@@ -550,6 +608,53 @@ export class WorldView {
     mk(grass, this.mats.grass, false);
     mk(plaza, this.mats.plaza, false);
     mk(parking, this.mats.parking, false);
+  }
+
+  /**
+   * A junction at the end of a bridge can reach past the bank out over the water. The corners
+   * beside it are paved out to the deck edge, so no part of the junction hangs over open water.
+   */
+  private bridgeHeads(): V2[][] {
+    const river = this.city.river;
+    if (!river) return [];
+    const out: V2[][] = [];
+    for (const r of this.city.net.roads) {
+      if (!r.bridge) continue;
+      // just inside the deck edge
+      const hw = r.width / 2 + r.sidewalk + 0.28;
+      for (const n of [r.a, r.b]) {
+        const top = n.y < river.yTop;
+        if (!top && n.y <= river.yBot) continue;
+        const k = n.arms.length;
+        const i = n.arms.findIndex((a) => a.road === r);
+        if (i < 0 || k < 2) continue;
+        const A = n.arms[i];
+        const u = A.dir;
+        const v = right(u);
+        const B = n.arms[(i + 1) % k];
+        const P = n.arms[(i - 1 + k) % k];
+        // corner arcs either side of the bridge arm, each with the arms it joins (outer corners only)
+        const corners: [V2[], V2, V2][] = [];
+        if (B.dir.x * v.x + B.dir.y * v.y > 0.05) corners.push([cornerPoints(n, B, A), B.dir, A.dir]);
+        if (P.dir.x * v.x + P.dir.y * v.y < -0.05) corners.push([cornerPoints(n, A, P), A.dir, P.dir]);
+        for (const [arc, d0, d1] of corners) {
+          if (!arc.length) continue;
+          // the corner area outside the junction, between the two curbs
+          const p0 = arc[0];
+          const p1 = arc[arc.length - 1];
+          let poly: V2[] = [{ x: p0.x + d0.x * 60, y: p0.y + d0.y * 60 }, ...arc, { x: p1.x + d1.x * 60, y: p1.y + d1.y * 60 }];
+          if (signedArea(poly) < 0) poly.reverse();
+          // ...over the water, short of the deck's start and within its width
+          poly = top ? clipHalfPlane(poly, 0, -1, -river.yTop) : clipHalfPlane(poly, 0, 1, river.yBot);
+          poly = clipHalfPlane(poly, u.x, u.y, u.x * n.x + u.y * n.y + A.trim + 0.05);
+          const c = v.x * n.x + v.y * n.y;
+          poly = clipHalfPlane(poly, v.x, v.y, c + hw);
+          poly = clipHalfPlane(poly, -v.x, -v.y, hw - c);
+          if (poly.length >= 3 && Math.abs(signedArea(poly)) > 0.2) out.push(poly);
+        }
+      }
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------------------
@@ -576,7 +681,7 @@ export class WorldView {
       if (b.day === this.day + 1) {
         // construction site for tomorrow
         const corners = footprint(b, 0.8);
-        dirt.polygon(corners, Y_WALK + 0.02, 0.2);
+        dirt.polygon(corners, Y_ON_WALK + 0.005, 0.2);
         const h = Math.min(b.h * 0.45, 24);
         scaffold.box(b.x, Y_WALK, b.y, b.w * 0.9, h, b.d * 0.9, b.ux, b.uy);
         if (b.w > 18) {
@@ -864,7 +969,7 @@ export class WorldView {
       const mesh = new THREE.InstancedMesh(geos[list[0].kind], this.mats.tree, list.length);
       list.forEach((t, i) => {
         q.setFromAxisAngle(up, rng.range(0, Math.PI * 2));
-        m.compose(new THREE.Vector3(t.x, Y_WALK, t.y), q, new THREE.Vector3(t.s, t.s * rng.range(0.9, 1.15), t.s));
+        m.compose(new THREE.Vector3(t.x, t.forest ? Y_GROUND : Y_WALK, t.y), q, new THREE.Vector3(t.s, t.s * rng.range(0.9, 1.15), t.s));
         mesh.setMatrixAt(i, m);
         const tint = rng.range(0.75, 1.15);
         col.setRGB(tint * rng.range(0.9, 1.05), tint, tint * rng.range(0.85, 1.0));

@@ -38,6 +38,8 @@ function mixHex(a: number, b: number, t: number, out: THREE.Color): THREE.Color 
   return out.copy(ca).lerp(cb, t);
 }
 
+const UP = new THREE.Vector3(0, 1, 0);
+
 export class Environment {
   scene: THREE.Scene;
   sun: THREE.DirectionalLight;
@@ -52,6 +54,10 @@ export class Environment {
   private rainMat: THREE.LineBasicMaterial;
   exposure = 1;
   shadowSize = 200;
+  private shadowRes = 2048;
+  private tmpR = new THREE.Vector3();
+  private tmpU = new THREE.Vector3();
+  private tmpT = new THREE.Vector3();
 
   constructor(scene: THREE.Scene, shadows: boolean, shadowRes: number) {
     this.scene = scene;
@@ -113,9 +119,23 @@ export class Environment {
       elev = 0.7;
     }
     const dir = new THREE.Vector3(Math.cos(ang) * 0.85, 0.35 + elev * 0.9, 0.55).normalize();
-    this.sun.position.copy(target).addScaledVector(dir, 400);
-    this.sun.target.position.copy(target);
-    this.shadowSize = clamp(viewRadius * 1.35, 60, 520);
+    // shadow box in a few fixed sizes (no shimmer while zooming); shrinks only on a clear zoom-in
+    const need = clamp(viewRadius * 1.35, 60, 520);
+    if (need > this.shadowSize || need < this.shadowSize * 0.6) {
+      this.shadowSize = Math.min(520, 60 * Math.pow(1.3, Math.ceil(Math.log(need / 60) / Math.log(1.3) - 1e-6)));
+    }
+    // move the box in whole shadow-map texels so shadows do not crawl while panning
+    const texel = (2 * this.shadowSize) / this.shadowRes;
+    const right = this.tmpR.crossVectors(UP, dir).normalize();
+    const up = this.tmpU.crossVectors(dir, right);
+    const along = target.dot(dir);
+    const snapped = this.tmpT
+      .copy(right)
+      .multiplyScalar(Math.round(target.dot(right) / texel) * texel)
+      .addScaledVector(up, Math.round(target.dot(up) / texel) * texel)
+      .addScaledVector(dir, along);
+    this.sun.position.copy(snapped).addScaledVector(dir, 400);
+    this.sun.target.position.copy(snapped);
     const sc = this.sun.shadow.camera;
     sc.left = -this.shadowSize;
     sc.right = this.shadowSize;
@@ -126,6 +146,7 @@ export class Environment {
   }
 
   setShadows(on: boolean, res: number): void {
+    this.shadowRes = res;
     this.sun.castShadow = on;
     if (!on) return;
     const sh = this.sun.shadow;

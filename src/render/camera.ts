@@ -112,7 +112,8 @@ export class CameraRig {
     // camera sits "south" of the target when yaw = 0, looking north
     this.camera.position.set(this.target.x + Math.sin(this.yaw) * r, h, this.target.z + Math.cos(this.yaw) * r);
     this.camera.lookAt(this.target);
-    this.camera.near = Math.max(0.5, this.dist * 0.02);
+    // the camera stays far above the ground, so a deep near plane is safe and keeps depth precise
+    this.camera.near = Math.max(1, this.dist * 0.05);
     this.camera.far = Math.max(2500, this.dist * 8);
     this.camera.updateProjectionMatrix();
   }

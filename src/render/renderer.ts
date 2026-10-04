@@ -48,7 +48,8 @@ export class GameRenderer {
     this.container = container;
     this.level = level;
     this.quality = qualityPreset(level);
-    this.renderer = new THREE.WebGLRenderer({ antialias: level !== 'low', powerPreference: 'high-performance', stencil: false });
+    // asking for a stencil buffer gets a 24-bit depth buffer on GPUs that otherwise hand out 16 bits
+    this.renderer = new THREE.WebGLRenderer({ antialias: level !== 'low', powerPreference: 'high-performance', stencil: true });
     this.renderer.setPixelRatio(this.quality.pixelRatio);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
