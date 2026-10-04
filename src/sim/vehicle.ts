@@ -125,6 +125,15 @@ export class Vehicle {
   committed: Conn | null = null;
   holdLine = false;
   holdWhy = '';
+  /** where a vehicle standing in a crossing ahead stops this one (inside a junction) */
+  physStop = Infinity;
+  physBy: Vehicle | null = null;
+  /** who keeps this vehicle standing inside a junction: 1 = in a crossing ahead, 2 = car in front */
+  blockedBy: Vehicle | null = null;
+  blockKind = 0;
+  /** gridlock breaker: briefly edge past these standing vehicles */
+  squeezeT = 0;
+  squeezePast: Set<Vehicle> | null = null;
   lastEvt = '';
   lastEvtT = 0;
   stopDone = false;

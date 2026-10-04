@@ -88,6 +88,12 @@ export function timeToCover(d: number, v: number, a: number, vmax: number): numb
 
 const tmpPose = { x: 0, y: 0, dx: 1, dy: 0 };
 
+interface Leader {
+  gap: number;
+  vl: number;
+  w: Vehicle | null;
+}
+
 interface LaneSnapshot {
   roads: Set<Road>;
   lanes: Lane[];
@@ -404,6 +410,7 @@ export class Sim {
     if (this.statT >= 1) {
       this.updateStats(this.statT);
       this.statT = 0;
+      this.breakGridlocks();
       for (const n of this.net.nodes) if (n.dying.length) cleanupDying(n);
     }
   }
@@ -438,7 +445,13 @@ export class Sim {
     const rainT = this.rain * 0.45;
     const T = v.T + rainT;
     const a = v.a * (1 - this.rain * 0.15);
-    const vd = this.vdes(v, seg);
+    let vd = this.vdes(v, seg);
+    if (v.squeezeT > 0) {
+      // edging past a standing car to undo a gridlock: walking pace
+      v.squeezeT -= dt;
+      vd = Math.min(vd, 3);
+      if (v.squeezeT <= 0) v.squeezePast = null;
+    }
     const look = Math.max(40, (v.v * v.v) / (2 * v.b) + v.v * 2.5 + 15);
     let acc = idmFree(v.v, vd, a);
     const L = this.findLeader(v, look);
@@ -476,6 +489,29 @@ export class Sim {
     if (stopD < Infinity) {
       const aI = idm(v.v, vd, stopD + 0.3, 0, T, 0.6, a, v.b);
       acc = Math.min(acc, this.stopProfile(v.v, stopD, v.b, aI));
+    }
+    // keep the box clear: never come to rest inside a crossing ahead
+    if (!v.siren && v.squeezeT <= 0) {
+      const rest = Math.min(L && L.vl < 1.5 ? L.gap - 1 : Infinity, v.physStop);
+      if (rest < Infinity) {
+        const cb = this.clearBefore(v, rest);
+        if (cb < Infinity) {
+          const aI = idm(v.v, vd, cb + 0.3, 0, T, 0.6, a, v.b);
+          acc = Math.min(acc, this.stopProfile(v.v, cb, v.b, aI));
+        }
+      }
+    }
+    // who keeps this vehicle standing inside a junction (gridlock detection)
+    v.blockedBy = null;
+    v.blockKind = 0;
+    if (!seg.isLane && v.v < 0.5) {
+      if (v.physBy && v.physStop <= (L ? L.gap : Infinity) + 0.5) {
+        v.blockedBy = v.physBy;
+        v.blockKind = 1;
+      } else if (L && L.w && L.gap < 3 && L.vl < 0.5) {
+        v.blockedBy = L.w;
+        v.blockKind = 2;
+      }
     }
     // yield to emergency vehicles coming from behind
     if (!v.siren && this.sirens.length && seg.isLane) {
@@ -545,8 +581,8 @@ export class Sim {
     return Math.max(aIdm, 0.5 * (Math.sqrt(2 * 0.72 * b * dEff) - v));
   }
 
-  private findLeader(v: Vehicle, look: number): { gap: number; vl: number } | null {
-    const best = { gap: Infinity, vl: 0 };
+  private findLeader(v: Vehicle, look: number): Leader | null {
+    const best: Leader = { gap: Infinity, vl: 0, w: null };
     const seg = v.seg;
     const vs = seg.vehs;
     const idx = vs.indexOf(v);
@@ -557,6 +593,7 @@ export class Sim {
         if (v.siren && w.pullOver > 0 && w.lat > 0.6 && w.v < 2) continue;
         best.gap = w.s - w.len - v.s;
         best.vl = w.v;
+        best.w = w;
         break;
       }
     }
@@ -579,6 +616,7 @@ export class Sim {
             if (g < best.gap) {
               best.gap = g;
               best.vl = w.v;
+              best.w = w;
             }
           }
         }
@@ -597,6 +635,7 @@ export class Sim {
         if (g < best.gap) {
           best.gap = g;
           best.vl = w.v;
+          best.w = w;
         }
       }
       for (const o of nx.obstacles) {
@@ -614,6 +653,7 @@ export class Sim {
             if (g < best.gap) {
               best.gap = g;
               best.vl = w.v;
+              best.w = w;
             }
           }
         }
@@ -629,7 +669,7 @@ export class Sim {
    * Zipper merge: vehicles on a connector that merges with ours and that are
    * closer to the merge point are treated as (virtual) leaders.
    */
-  private mergeLeader(v: Vehicle, c: Conn, dToEnd: number, best: { gap: number; vl: number }): void {
+  private mergeLeader(v: Vehicle, c: Conn, dToEnd: number, best: Leader): void {
     for (const k of c.conflicts) {
       if (!k.merge) continue;
       const o = k.other;
@@ -645,6 +685,7 @@ export class Sim {
         if (g < best.gap) {
           best.gap = g;
           best.vl = w.v;
+          best.w = w;
         }
       }
     }
@@ -658,6 +699,8 @@ export class Sim {
   private stopDistance(v: Vehicle, look: number): number {
     let best = Infinity;
     const seg = v.seg;
+    v.physStop = Infinity;
+    v.physBy = null;
     if (seg.isLane) {
       const lane = seg as Lane;
       const dEnd = lane.len - v.s;
@@ -1087,6 +1130,7 @@ export class Sim {
   /** Vehicles inside a junction: wait before conflict zones that are occupied / have priority traffic. */
   private junctionHold(v: Vehicle, c: Conn, d0: number, sOnC: number): number {
     let best = Infinity;
+    const squeezing = v.squeezeT > 0 && v.squeezePast;
     for (const k of c.conflicts) {
       if (k.sOut <= sOnC) continue;
       const dIn = d0 + k.sIn - sOnC;
@@ -1098,27 +1142,34 @@ export class Sim {
         if (dIn > -2.5 && d0 === 0 && !k.merge) {
           const depth = -dIn;
           for (const w of O.vehs) {
+            if (squeezing && v.squeezePast!.has(w)) continue;
             const wDepth = w.s - k.oIn;
             if (wDepth <= 0 || w.s - w.len >= k.oOut) continue;
-            if (wDepth > depth || (wDepth === depth && w.id < v.id)) return 0;
+            if (wDepth > depth || (wDepth === depth && w.id < v.id)) {
+              this.notePhys(v, 0, w);
+              return 0;
+            }
           }
         }
         continue;
       }
       // physical occupancy
-      let blocked = false;
+      let by: Vehicle | null = null;
       const tIn = timeToCover(Math.max(0, dIn), v.v, v.a, this.vdes(v, c));
       for (const w of O.vehs) {
+        if (squeezing && v.squeezePast!.has(w)) continue;
         const wRear = w.s - w.len;
         if (wRear >= k.oOut) continue;
         if (k.oIn - w.s <= 0) {
           if (w.v < 0.3 || (k.oOut - wRear) / Math.max(w.v, 0.5) + 0.2 > tIn) {
-            blocked = true;
+            by = w;
             break;
           }
         }
       }
-      if (!blocked) {
+      let blocked = !!by;
+      if (by) this.notePhys(v, Math.max(0, dIn - 0.6), by);
+      else {
         const yields = this.mustYield(c, O, v);
         const permissive = c.node.control === 'signal' && c.sig === SIG_P;
         if (yields && (permissive || c.kind === 'entry')) {
@@ -1129,6 +1180,74 @@ export class Sim {
       if (blocked) best = Math.min(best, Math.max(0, dIn - 0.6));
     }
     return best;
+  }
+
+  /** a vehicle standing in a crossing ahead stops v at distance d */
+  private notePhys(v: Vehicle, d: number, by: Vehicle): void {
+    if (d < v.physStop) {
+      v.physStop = d;
+      v.physBy = by;
+    }
+  }
+
+  /**
+   * Do not come to rest inside a crossing: if the place where this vehicle will stand
+   * (behind a standing car or a blocked crossing, `rest` metres ahead) leaves its body
+   * in a conflict zone it has not entered yet, it waits before that zone instead.
+   */
+  private clearBefore(v: Vehicle, rest: number): number {
+    let d0: number;
+    let sOn: number;
+    let i0: number;
+    if (v.seg.isLane) {
+      const first = v.plan[0];
+      if (!first || first.isLane) return Infinity;
+      d0 = v.seg.len - v.s;
+      if (d0 > 40) return Infinity;
+      sOn = 0;
+      i0 = 0;
+    } else {
+      d0 = 0;
+      sOn = v.s;
+      i0 = -1;
+    }
+    let best = Infinity;
+    for (let i = i0; i < v.plan.length; i++) {
+      const c = (i < 0 ? v.seg : v.plan[i]) as Conn;
+      if (c.isLane || d0 > rest) break;
+      for (const k of c.conflicts) {
+        if (k.merge) continue;
+        const dIn = d0 + k.sIn - sOn;
+        const dOut = d0 + k.sOut - sOn;
+        if (dIn <= 0.3 || dIn > rest || rest - v.len >= dOut) continue;
+        // would stand inside this crossing: wait before it while that is still comfortable
+        const stopAt = dIn - 0.6;
+        if ((v.v * v.v) / (2 * Math.max(stopAt, 0.1)) <= 4.5) best = Math.min(best, stopAt);
+      }
+      d0 += c.len - sOn;
+      sOn = 0;
+    }
+    return best;
+  }
+
+  /** a ring of vehicles holding each other inside a junction: let one edge past its blocker */
+  private breakGridlocks(): void {
+    for (const v of this.vehicles) {
+      if (v.state !== 'drive' || v.seg.isLane || v.v > 0.3 || v.stuckT < 6 || v.squeezeT > 0 || !v.blockedBy) continue;
+      const ring: Vehicle[] = [v];
+      let w: Vehicle | null = v.blockedBy;
+      while (w && ring.length < 8 && !ring.includes(w)) {
+        ring.push(w);
+        w = w.blockedBy;
+      }
+      if (w !== v) continue;
+      // the one that has waited longest and is held by a crossing (not by the car in front) goes
+      let pick: Vehicle | null = null;
+      for (const x of ring) if (x.blockKind === 1 && (!pick || x.stuckT > pick.stuckT)) pick = x;
+      if (!pick) continue;
+      pick.squeezeT = 4;
+      pick.squeezePast = new Set(ring);
+    }
   }
 
   private onRedRun(v: Vehicle, c: Conn, since: number): void {

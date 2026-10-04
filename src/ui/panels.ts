@@ -35,6 +35,11 @@ export class Panels {
     return !this.game.unlocks.has(u);
   }
 
+  /** one line under a section title: what the setting does to traffic */
+  private desc(key: StrKey, lead = false): HTMLElement {
+    return h('div', { class: `sec-desc ${lead ? 'lead' : ''}` }, t(key));
+  }
+
   private lockNote(u: Unlock): HTMLElement {
     return h('div', { class: 'lock-note' }, svg(ICON.lock, 14), t('locked_feature', { n: unlockDay(this.game.preset, u) }));
   }
@@ -137,13 +142,14 @@ export class Panels {
       );
       grid.append(b);
     }
-    body.append(h('div', { class: 'sec-title' }, t('control')), grid, h('div', { class: 'hint' }, t(`ctrlDesc_${n.control === 'none' ? 'priority' : n.control}` as StrKey)));
+    body.append(h('div', { class: 'sec-title' }, t('control')), this.desc('ctrlSecDesc'), grid, h('div', { class: 'hint' }, t(`ctrlDesc_${n.control === 'none' ? 'priority' : n.control}` as StrKey)));
     if (n.control === 'priority') this.prioritySection(body, n);
     if (n.control === 'signal' && n.signal) this.signalSection(body, n);
     // police (gridlock breaker)
     {
       const cd = (g.policeCooldown.get(n.id) ?? 0) - g.sim.time;
       body.append(
+        this.desc('policeDesc', true),
         h(
           'button',
           { class: `btn wide police ${cd > 0 ? 'disabled' : ''}`, title: t('policeDesc'), onclick: () => g.sendPolice(n) },
@@ -156,6 +162,7 @@ export class Panels {
     if (n.control !== 'roundabout') {
       const lock = this.locked('box');
       body.append(
+        this.desc('boxDesc', true),
         this.toggleRow(svg(ICON.box, 20), t('boxJunction'), n.box, lock ? null : `${money(COST.box)}`, lock, () => g.toggleBox(n), lock ? this.lockNote('box') : null),
       );
     }
@@ -196,9 +203,10 @@ export class Panels {
       }
     body.append(
       h('div', { class: 'sec-title' }, t('majorRoad'), h('span', { class: 'sec-extra' }, money(COST.priority))),
-      h('div', { class: 'hint' }, t('majorHint')),
+      this.desc('majorHint'),
       grid,
       h('div', { class: 'sec-title' }, t('minorSign')),
+      this.desc('minorDesc'),
       h(
         'div',
         { class: 'seg' },
@@ -215,10 +223,11 @@ export class Panels {
     const plans: PlanType[] = ['two', 'leftlead', 'split'];
     body.append(
       h('div', { class: 'sec-title' }, t('plan')),
+      this.desc(`planDesc_${s.plan}` as StrKey),
       h(
         'div',
         { class: 'seg' },
-        ...plans.map((p) => h('button', { class: s.plan === p ? 'active' : '', onclick: () => g.setPlan(n, p) }, t(`plan_${p}` as StrKey))),
+        ...plans.map((p) => h('button', { class: s.plan === p ? 'active' : '', title: t(`planDesc_${p}` as StrKey), onclick: () => g.setPlan(n, p) }, t(`plan_${p}` as StrKey))),
       ),
     );
     // controller mode
@@ -240,7 +249,7 @@ export class Panels {
         ),
       );
     }
-    body.append(h('div', { class: 'sec-title' }, t('mode')), modeRow, h('div', { class: 'hint' }, t(`modeDesc_${s.mode}` as StrKey)));
+    body.append(h('div', { class: 'sec-title' }, t('mode')), this.desc(`modeDesc_${s.mode}` as StrKey), modeRow);
     // phases
     const list = h('div', { class: 'phase-list' });
     s.phases.forEach((p, i) => list.append(this.phaseRow(n, p, i)));
@@ -252,6 +261,7 @@ export class Panels {
     add(
       body,
       h('div', { class: 'sec-title' }, t('phases'), h('span', { class: 'sec-extra' }, cycle)),
+      this.desc(`phasesDesc_${s.mode}` as StrKey),
       list,
       s.mode === 'smart' ? null : h('div', { class: 'row gap' }, h('button', { class: 'btn', onclick: () => g.autoTime(n) }, svg(ICON.auto, 16), t('autoTime'))),
     );
@@ -265,14 +275,14 @@ export class Panels {
       warn.style.display = Number(range.value) < 1.5 ? '' : 'none';
     });
     const warn = h('div', { class: 'hint bad', style: { display: s.allRed < 1.5 ? '' : 'none' } }, '⚠ ', t('allRedWarn'));
-    body.append(h('div', { class: 'slider-row' }, h('span', null, t('allRed')), range, val), warn);
-    if (!this.locked('rtor')) body.append(this.toggleRow(svg(ICON.signal, 18), t('rtor'), n.rtor, money(COST.rtor), false, () => g.toggleRTOR(n)));
+    body.append(h('div', { class: 'sec-title' }, t('allRed')), this.desc('allRedDesc'), h('div', { class: 'slider-row' }, h('span', null, t('allRed')), range, val), warn);
+    if (!this.locked('rtor')) body.append(this.desc('rtorDesc', true), this.toggleRow(svg(ICON.signal, 18), t('rtor'), n.rtor, money(COST.rtor), false, () => g.toggleRTOR(n)));
   }
 
   private waveSection(body: HTMLElement, n: Node): void {
     const g = this.game;
     const w = g.sim.waves;
-    body.append(h('div', { class: 'sec-title' }, t('greenWave'), h('span', { class: 'sec-extra' }, money(COST.greenwave))), h('div', { class: 'hint' }, t('greenWaveDesc')));
+    body.append(h('div', { class: 'sec-title' }, t('greenWave'), h('span', { class: 'sec-extra' }, money(COST.greenwave))), this.desc('greenWaveDesc'));
     for (const name of [...new Set(n.arms.map((a) => a.road.name))]) {
       const c = w.get(name);
       const signals = g.sim.signalNodes.filter((m) => m.arms.some((a) => a.road.name === name)).length;
@@ -339,7 +349,7 @@ export class Panels {
     const g = this.game;
     const lock = this.locked('arrows');
     const sec = h('div', { class: 'lanes-sec' });
-    body.append(h('div', { class: 'sec-title' }, t('approaches'), h('span', { class: 'sec-extra' }, money(COST.arrows))), lock ? this.lockNote('arrows') : h('div', { class: 'hint' }, t('laneHint')), sec);
+    body.append(h('div', { class: 'sec-title' }, t('approaches'), h('span', { class: 'sec-extra' }, money(COST.arrows))), this.desc('approachesDesc'), lock ? this.lockNote('arrows') : h('div', { class: 'hint' }, t('laneHint')), sec);
     for (const arm of n.arms) {
       const inL = arm.inLink;
       if (!inL || inL.lanes.length === 0) continue;
@@ -435,8 +445,9 @@ export class Panels {
     add(
       body,
       h('div', { class: 'sec-title' }, t('lanes'), h('span', { class: 'sec-extra' }, t('widthM', { m: Math.round(r.width) }))),
-      dirRow(`${t('towards')} ${toB}`, 'ab', angAB),
-      dirRow(`${t('towards')} ${toA}`, 'ba', angAB + 180),
+      this.desc('lanesDesc'),
+      dirRow(t('towards', { r: toB }), 'ab', angAB),
+      dirRow(t('towards', { r: toA }), 'ba', angAB + 180),
       note,
     );
     if (!lock && changed) {
@@ -465,6 +476,7 @@ export class Panels {
     add(
       body,
       h('div', { class: 'sec-title' }, t('speedLimit'), h('span', { class: 'sec-extra' }, money(COST.speed))),
+      this.desc('speedDesc'),
       slock ? this.lockNote('speed') : null,
       h(
         'div',
@@ -476,9 +488,9 @@ export class Panels {
     );
     // bus lanes
     const block = this.locked('bus');
-    add(body, h('div', { class: 'sec-title' }, t('busLane'), h('span', { class: 'sec-extra' }, money(COST.bus))), block ? this.lockNote('bus') : null);
-    if (r.lanesAB > 1) body.append(this.toggleRow(svg(ICON.bus, 18), `${t('towards')} ${toB}`, r.busAB, null, block, () => g.toggleBus(r, true)));
-    if (r.lanesBA > 1) body.append(this.toggleRow(svg(ICON.bus, 18), `${t('towards')} ${toA}`, r.busBA, null, block, () => g.toggleBus(r, false)));
+    add(body, h('div', { class: 'sec-title' }, t('busLane'), h('span', { class: 'sec-extra' }, money(COST.bus))), this.desc('busDesc'), block ? this.lockNote('bus') : null);
+    if (r.lanesAB > 1) body.append(this.toggleRow(svg(ICON.bus, 18), t('towards', { r: toB }), r.busAB, null, block, () => g.toggleBus(r, true)));
+    if (r.lanesBA > 1) body.append(this.toggleRow(svg(ICON.bus, 18), t('towards', { r: toA }), r.busBA, null, block, () => g.toggleBus(r, false)));
     void ROAD_SPECS;
   }
 

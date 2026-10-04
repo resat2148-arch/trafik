@@ -391,8 +391,10 @@ export class SignalCtrl {
         const v = vs[i];
         const d = lane.len - v.s;
         if (d > 60) break;
+        // a queue whose first car cannot go (blocked exit, waiting for a gap) gains nothing from more green
+        if (i === vs.length - 1 && v.holdLine && v.v < 0.5) break;
         if (v.plan[0] !== c) continue;
-        // a queue over the stop-line detector keeps calling; others must arrive within the gap
+        // a moving queue over the stop-line detector keeps calling; others must arrive within the gap
         if (d < 25 && v.v < 3) return true;
         if (d < 4 || d / Math.max(v.v, 0.5) < gap) return true;
       }

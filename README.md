@@ -54,6 +54,8 @@ mutlu tutmalısın — memnuniyet sıfıra düşerse kovulursun.
   ayrılan > yan yoldan gelen); ışık (sarıda ikilem bölgesi, kırmızı ihlali),
   izinli sola dönüşte kavşak içinde bekleme, dur/yol ver boşluk kabulü (sabırsızlıkla küçülen
   kabul edilebilir boşluk), kavşağı tıkamama kuralı, döner kavşakta içerideki araç önceliği.
+  Sürücüler temizleyemeyecekleri bir kesişme alanına girmez (çıkış doluysa çizgide bekler);
+  yine de kavşak içinde döngüsel kilitlenme oluşursa döngüdeki bir araç yavaşça sıyrılıp geçer.
 - **Rota:** Canlı seyahat süreleriyle Dijkstra, ana arter tercihi, navigasyon uygulaması
   kullanan sürücülerin yeniden rotalanması, kaçırılan dönüşte yeni rota.
 - **Talep:** Saatlik profiller (ev→iş, iş→ev, alışveriş, iş seyahati, transit, şehir dışı),
