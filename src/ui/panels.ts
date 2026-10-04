@@ -176,15 +176,28 @@ export class Panels {
 
   private prioritySection(body: HTMLElement, n: Node): void {
     const g = this.game;
-    const majors = n.arms.filter((a) => n.majorRoads.has(a.road.id)).map((a) => a.road.name);
-    const name = [...new Set(majors)].join(' / ') || '—';
+    // every pair of arms can carry the major road: straight through or turning
+    const arms = n.arms;
+    const grid = h('div', { class: 'major-grid' });
+    for (let i = 0; i < arms.length; i++)
+      for (let j = i + 1; j < arms.length; j++) {
+        const A = arms[i];
+        const B = arms[j];
+        const on = n.majorRoads.size === 2 && n.majorRoads.has(A.road.id) && n.majorRoads.has(B.road.id);
+        const label = A.road.name === B.road.name ? A.road.name : `${A.road.name} · ${B.road.name}`;
+        grid.append(
+          h(
+            'button',
+            { class: `major-opt ${on ? 'active' : ''}`, title: label, onclick: () => g.setMajor(n, A, B) },
+            h('div', { class: 'major-dia', html: majorDiagram(n, A, B, g.renderer.rig.yaw) }),
+            h('span', null, label),
+          ),
+        );
+      }
     body.append(
-      h('div', { class: 'sec-title' }, t('majorRoad')),
-      h(
-        'div',
-        { class: 'row' },
-        h('button', { class: 'btn wide', onclick: () => g.cycleMajor(n) }, svg(ICON.priority, 18), name, h('span', { class: 'cost' }, money(COST.priority))),
-      ),
+      h('div', { class: 'sec-title' }, t('majorRoad'), h('span', { class: 'sec-extra' }, money(COST.priority))),
+      h('div', { class: 'hint' }, t('majorHint')),
+      grid,
       h('div', { class: 'sec-title' }, t('minorSign')),
       h(
         'div',
@@ -233,20 +246,16 @@ export class Panels {
     s.phases.forEach((p, i) => list.append(this.phaseRow(n, p, i)));
     const cycle = h('span', null, '');
     this.live.push(() => {
-      cycle.textContent = `${t('cycle')}: ${Math.round(s.cycleLength)}${t('sec')}`;
+      const c = s.coord ? s.coord.cycle : s.cycleLength;
+      cycle.textContent = `${t('cycle')}: ${Math.round(c)}${t('sec')}${s.coord ? ' 🌊' : ''}`;
     });
-    body.append(
+    add(
+      body,
       h('div', { class: 'sec-title' }, t('phases'), h('span', { class: 'sec-extra' }, cycle)),
       list,
-      h(
-        'div',
-        { class: 'row gap' },
-        h('button', { class: 'btn', onclick: () => g.autoTime(n) }, svg(ICON.auto, 16), t('autoTime')),
-        this.locked('greenwave')
-          ? null
-          : h('button', { class: 'btn', title: t('greenWaveDesc'), onclick: () => g.greenWave(n) }, svg(ICON.wave, 16), t('greenWave'), h('span', { class: 'cost' }, money(COST.greenwave))),
-      ),
+      s.mode === 'smart' ? null : h('div', { class: 'row gap' }, h('button', { class: 'btn', onclick: () => g.autoTime(n) }, svg(ICON.auto, 16), t('autoTime'))),
     );
+    if (!this.locked('greenwave')) this.waveSection(body, n);
     // all-red
     const val = h('b', null, `${s.allRed.toFixed(1)}${t('sec')}`);
     const range = h('input', { type: 'range', min: '0.5', max: '4', step: '0.5', value: String(s.allRed) }) as HTMLInputElement;
@@ -260,29 +269,68 @@ export class Panels {
     if (!this.locked('rtor')) body.append(this.toggleRow(svg(ICON.signal, 18), t('rtor'), n.rtor, money(COST.rtor), false, () => g.toggleRTOR(n)));
   }
 
+  private waveSection(body: HTMLElement, n: Node): void {
+    const g = this.game;
+    const w = g.sim.waves;
+    body.append(h('div', { class: 'sec-title' }, t('greenWave'), h('span', { class: 'sec-extra' }, money(COST.greenwave))), h('div', { class: 'hint' }, t('greenWaveDesc')));
+    for (const name of [...new Set(n.arms.map((a) => a.road.name))]) {
+      const c = w.get(name);
+      const signals = g.sim.signalNodes.filter((m) => m.arms.some((a) => a.road.name === name)).length;
+      const lock = !c && signals < 2;
+      body.append(this.toggleRow(svg(ICON.wave, 18), name, !!c, money(COST.greenwave), lock, () => g.toggleWave(n, name), lock ? h('div', { class: 'hint' }, t('waveNeeds')) : null));
+      if (!c || c.members.length < 2) continue;
+      // the cross streets at both ends name the two directions
+      const cross = (m: Node): string => m.name.split(' & ').find((x) => x !== name) ?? m.name;
+      const fwd = cross(c.members[c.members.length - 1]);
+      const back = cross(c.members[0]);
+      const dirs: [number, string][] = [
+        [0, t('waveAuto')],
+        [1, `➜ ${fwd}`],
+        [-1, `➜ ${back}`],
+      ];
+      add(
+        body,
+        h('div', { class: 'hint' }, t('waveMembers', { n: c.members.length, c: Math.round(w.cycle) })),
+        h('div', { class: 'seg wave-dir' }, ...dirs.map(([d, label]) => h('button', { class: c.dir === d ? 'active' : '', onclick: () => g.setWaveDir(name, d) }, label))),
+        c.dir === 0 ? h('div', { class: 'hint' }, t('waveNow', { r: c.active > 0 ? fwd : back })) : null,
+      );
+    }
+  }
+
   private phaseRow(n: Node, p: SigPhase, i: number): HTMLElement {
     const g = this.game;
     const s = n.signal!;
+    const smart = s.mode === 'smart';
     const dia = h('div', { class: 'phase-dia', html: phaseDiagram(n, p, g.renderer.rig.yaw) });
     const prog = h('i');
     const lbl = h('b', null, `${p.dur}${t('sec')}`);
-    const range = h('input', { type: 'range', min: '4', max: '75', step: '1', value: String(p.dur) }) as HTMLInputElement;
+    const last = h('small', { class: 'phase-last' }, '');
+    const range = h('input', { type: 'range', min: '4', max: '75', step: '1', value: String(p.dur), disabled: smart }) as HTMLInputElement;
     range.addEventListener('input', () => {
       g.setPhaseDur(n, i, Number(range.value));
       lbl.textContent = `${range.value}${t('sec')}`;
     });
+    const title = s.mode === 'fixed' ? t('green') : smart ? t('aiGreen') : t('maxGreen');
     const row = h(
       'div',
       { class: 'phase-row' },
       dia,
-      h('div', { class: 'phase-ctl' }, h('div', { class: 'phase-top' }, h('span', null, `${s.mode === 'fixed' ? t('green') : t('maxGreen')} ${i + 1}`), lbl), range, h('div', { class: 'phase-prog' }, prog)),
+      h('div', { class: 'phase-ctl' }, h('div', { class: 'phase-top' }, h('span', null, `${title} ${i + 1}`), last, lbl), range, h('div', { class: 'phase-prog' }, prog)),
     );
     this.live.push(() => {
       const active = s.cur === i;
       row.classList.toggle('active', active);
       row.classList.toggle('yellow', active && s.state !== 'G');
-      const frac = active ? (s.state === 'G' ? Math.min(1, s.t / Math.max(1, p.dur)) : 1) : 0;
+      // the green this phase can still get: schedule (green wave), maximum (detectors) or set time
+      const total = s.coord && active ? s.t + Math.max(0, s.forceOff - g.sim.time) : s.mode === 'fixed' ? p.dur : s.maxGreen(p);
+      const frac = active ? (s.state === 'G' ? Math.min(1, s.t / Math.max(1, total)) : 1) : 0;
       prog.style.width = `${frac * 100}%`;
+      // timings that change by themselves: show what was actually given
+      if (s.mode !== 'fixed' || s.coord) last.textContent = p.lastGreen > 0 ? t('lastGreen', { s: Math.round(p.lastGreen) }) : '';
+      if (smart && Number(range.value) !== p.dur) {
+        range.value = String(p.dur);
+        lbl.textContent = `${p.dur}${t('sec')}`;
+      }
     });
     return row;
   }
@@ -502,6 +550,23 @@ function dirArrow(arm: Arm, yaw: number): HTMLElement {
 }
 
 /** SVG diagram of the movements that are green in a phase */
+/** small map of a junction with the major road drawn through two of its arms */
+export function majorDiagram(n: Node, A: Arm, B: Arm, yaw: number): string {
+  const C = 24;
+  const R = 20;
+  const parts: string[] = [];
+  parts.push(`<circle cx="${C}" cy="${C}" r="7" fill="#3a3f47"/>`);
+  for (const a of n.arms)
+    parts.push(`<line x1="${C}" y1="${C}" x2="${(C + a.dir.x * R).toFixed(1)}" y2="${(C + a.dir.y * R).toFixed(1)}" stroke="#3a3f47" stroke-width="9" stroke-linecap="round"/>`);
+  const ax = C + A.dir.x * R;
+  const ay = C + A.dir.y * R;
+  const bx = C + B.dir.x * R;
+  const by = C + B.dir.y * R;
+  parts.push(`<path d="M${ax.toFixed(1)} ${ay.toFixed(1)} Q${C} ${C} ${bx.toFixed(1)} ${by.toFixed(1)}" stroke="#ffc23a" stroke-width="5" fill="none" stroke-linecap="round"/>`);
+  const deg = (yaw * 180) / Math.PI;
+  return `<svg width="48" height="48" viewBox="0 0 48 48"><g transform="rotate(${deg.toFixed(1)} 24 24)">${parts.join('')}</g></svg>`;
+}
+
 export function phaseDiagram(n: Node, p: SigPhase, yaw: number): string {
   const C = 32;
   const R = 26;

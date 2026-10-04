@@ -30,6 +30,7 @@ import {
 import type { Control, Road } from './network.ts';
 import { buildJunction, cleanupDying, stronglyConnected, updateLinkNexts } from './junction.ts';
 import { SignalCtrl } from './signals.ts';
+import { WaveManager } from './corridors.ts';
 import type { PlanType } from './signals.ts';
 import { Router } from './routing.ts';
 import { MODEL, Vehicle, randomPaint } from './vehicle.ts';
@@ -110,6 +111,8 @@ export class Sim {
   private mergeReq = new Map<Lane, { v: Vehicle; s: number }[]>();
   private sirens: Vehicle[] = [];
   signalNodes: Node[] = [];
+  /** green-wave streets */
+  waves: WaveManager;
   gatewayQueues = new Map<number, SpawnReq[]>();
   stats = {
     trips: 0,
@@ -123,6 +126,7 @@ export class Sim {
     this.net = net;
     this.router = new Router(net);
     this.rng = new RNG(seed);
+    this.waves = new WaveManager(net);
   }
 
   // -------------------------------------------------------------------------
@@ -373,6 +377,7 @@ export class Sim {
   step(dt: number): void {
     this.time += dt;
     this.dt = dt;
+    this.waves.update(dt, this.signalNodes);
     for (const n of this.signalNodes) n.signal!.update(dt, this.time);
     this.sirens = this.vehicles.filter((v) => v.siren && v.state === 'drive');
     const vs = this.vehicles;
@@ -788,6 +793,16 @@ export class Sim {
     return !!c.inArm && c.node.majorRoads.has(c.inArm.road.id);
   }
 
+  /**
+   * Right of way at a priority junction: 2 = follows the major road (straight or bent),
+   * 1 = turns off the major road, 0 = comes from a minor road.
+   */
+  private priorityClass(c: Conn): number {
+    if (!this.isMajor(c)) return 0;
+    if (c.turn === 'U') return 1;
+    return c.outArm && c.node.majorRoads.has(c.outArm.road.id) ? 2 : 1;
+  }
+
   private mustYield(c: Conn, o: Conn, v: Vehicle): boolean {
     if (v.siren) return false;
     const n = c.node;
@@ -808,9 +823,9 @@ export class Sim {
         return this.rankYield(c, o);
       }
       case 'priority': {
-        const cm = this.isMajor(c);
-        const om = this.isMajor(o);
-        if (cm !== om) return !cm;
+        const cp = this.priorityClass(c);
+        const op = this.priorityClass(o);
+        if (cp !== op) return cp < op;
         return this.rankYield(c, o);
       }
       default:
@@ -1252,6 +1267,7 @@ export class Sim {
         n.delaySum += w;
         n.delayN++;
         n.passed++;
+        n.signal?.onEnter(c, seg as Lane);
         v.approachWait = 0;
         this.dropFromStopQueue(v);
         v.stopDone = false;

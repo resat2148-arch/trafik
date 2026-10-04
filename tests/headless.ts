@@ -16,7 +16,9 @@ const preset = PRESETS.find((p) => p.id === presetId)!;
 const t0 = performance.now();
 const city = generateCity(preset);
 const t1 = performance.now();
-const sim = new Sim(city.net, 99);
+const seedArg = process.argv.find((a) => a.startsWith('--seed='));
+const seed = seedArg ? Number(seedArg.slice(7)) : 0;
+const sim = new Sim(city.net, 99 + seed);
 sim.initJunctions();
 const fix = process.argv.includes('--fix');
 if (fix) {
@@ -31,10 +33,33 @@ if (fix) {
 if (process.argv.includes('--ra')) {
   for (const n of city.net.nodes) if (!n.gateway && n.arms.length >= 3 && n.control === 'allstop') sim.setControl(n, 'roundabout');
 }
-if (process.argv.includes('--smart')) {
-  for (const n of city.net.nodes) if (n.signal) n.signal.mode = 'smart';
+if (process.argv.includes('--bent')) {
+  // every unsignalised junction becomes a priority junction whose major road turns a corner
+  for (const n of city.net.nodes) {
+    if (n.gateway || n.arms.length < 3 || n.control === 'signal') continue;
+    sim.setControl(n, 'priority');
+    n.majorRoads = new Set([n.arms[0].road.id, n.arms[1].road.id]);
+    sim.rebuildNode(n);
+  }
 }
-const demand = new Demand(city, sim, 5);
+if (process.argv.includes('--smart')) {
+  for (const n of city.net.nodes) if (n.signal) {
+    n.signal.mode = 'smart';
+    n.signal.autoTime();
+  }
+}
+if (process.argv.includes('--actuated')) {
+  for (const n of city.net.nodes) if (n.signal) n.signal.mode = 'actuated';
+}
+if (process.argv.includes('--legacy')) {
+  // the outdated timing plans a fresh city starts with
+  let k = 1;
+  for (const n of city.net.nodes) if (n.signal) n.signal.legacyTiming(() => ((k = (k * 16807) % 2147483647) / 2147483647));
+}
+// --wave=NAME[,NAME]: green waves along these streets
+const waveArg = process.argv.find((a) => a.startsWith('--wave='));
+if (waveArg) for (const name of waveArg.slice(7).split(',')) sim.waves.add(name);
+const demand = new Demand(city, sim, 5 + seed);
 let pop = 0;
 let jobs = 0;
 for (const b of city.buildings) if (b.day <= day) {
@@ -197,6 +222,34 @@ console.log(`sim ${secs.toFixed(0)}s in ${(simMs / 1000).toFixed(2)}s real (${((
 console.log(`trips ${trips}, mean travel ${(tripTimes / Math.max(1, trips)).toFixed(1)}s, ff ${(tripFF / Math.max(1, trips)).toFixed(1)}s, ratio ${(tripTimes / Math.max(1, tripFF)).toFixed(2)}`);
 console.log(`abandoned ${abandons}, crashes ${crashes}, redRuns ${sim.stats.redRuns}, overlaps ${overlaps}, zoneViolations ${zoneViolations}, blocked ${demand.stats.blocked}`);
 for (const w of worstOverlap) console.log('  ', w);
+// --street=NAME: approach delays along a street in both directions (e.g. to judge a green wave)
+const streetArg = process.argv.find((a) => a.startsWith('--street='));
+if (streetArg) {
+  const name = streetArg.slice(9);
+  const roads = city.net.roads.filter((r) => r.name === name);
+  const sig = sim.signalNodes.filter((n) => n.arms.some((a) => a.road.name === name));
+  const c = sim.waves.get(name);
+  let fwd = 0;
+  let fwdN = 0;
+  let back = 0;
+  let backN = 0;
+  const ax = c ? c.axis : { x: roads[0].b.x - roads[0].a.x, y: roads[0].b.y - roads[0].a.y };
+  for (const r of roads)
+    for (const l of [r.ab, r.ba]) {
+      if (!sig.includes(l.to)) continue;
+      const along = (l.to.x - l.from.x) * ax.x + (l.to.y - l.from.y) * ax.y > 0;
+      if (along) {
+        fwd += l.delayEMA;
+        fwdN++;
+      } else {
+        back += l.delayEMA;
+        backN++;
+      }
+    }
+  console.log(
+    `street ${name}: ${sig.length} signals, wave=${c ? `dir ${c.dir} active ${c.active} cycle ${sim.waves.cycle}` : 'off'}; mean signal delay along axis ${(fwd / Math.max(1, fwdN)).toFixed(1)}s, against ${(back / Math.max(1, backN)).toFixed(1)}s`,
+  );
+}
 const los: Record<string, number> = {};
 for (const n of city.net.nodes) if (!n.gateway && n.passed > 0) los[sim.nodeLOS(n)] = (los[sim.nodeLOS(n)] ?? 0) + 1;
 console.log('LOS', JSON.stringify(los));

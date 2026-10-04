@@ -8,7 +8,7 @@ import { Sim } from '../sim/sim.ts';
 import type { SimEvent } from '../sim/sim.ts';
 import { Demand } from '../sim/demand.ts';
 import { ROAD_SPECS, SIG_P, computeCorners, laneWidthOf, maxSlotsOf, setRoadSlots, slotsFor } from '../sim/network.ts';
-import type { Conn, Control, Lane, Link, Node, Road } from '../sim/network.ts';
+import type { Arm, Conn, Control, Lane, Link, Node, Road } from '../sim/network.ts';
 import { arrowOptions, availableBits, movementsFor, stronglyConnected } from '../sim/junction.ts';
 import type { PlanType, SigMode } from '../sim/signals.ts';
 import { MODEL } from '../sim/vehicle.ts';
@@ -181,6 +181,7 @@ export class Game {
       this.totalTrips = run.totalTrips;
       this.starsHistory = run.stars.slice();
       this.applyNetwork(run);
+      for (const w of run.waves ?? []) this.sim.waves.add(w.name, w.dir);
     } else {
       const lr = new RNG(this.preset.seed + 99);
       for (const n of this.city.net.nodes) if (n.signal) n.signal.legacyTiming(() => lr.next());
@@ -380,6 +381,7 @@ export class Game {
       ...snap,
       totalTrips: this.totalTrips,
       stars: this.starsHistory,
+      waves: this.sim.waves.corridors.map((c) => ({ name: c.name, dir: c.dir })),
     };
     storeSave(this.save, immediate);
   }
@@ -816,6 +818,7 @@ export class Game {
     this.selection = s;
     this.follow = null;
     this.renderer.overlays.setSelection(s);
+    this.refreshWaveOverlay();
     this.ui?.refreshPanel();
   }
 
@@ -907,6 +910,9 @@ export class Game {
     this.renderer.world.refresh({ roads: wasRA || c === 'roundabout', blocks: wasRA || c === 'roundabout' });
     if (wasRA || c === 'roundabout') this.renderer.peds?.build(this.city);
     this.renderer.overlays.buildTraffic(this.city.net);
+    this.renderer.overlays.setSelection(this.selection);
+    this.sim.waves.update(0, this.sim.signalNodes);
+    this.refreshWaveOverlay();
     this.afterChange();
     this.ui?.tutorialEvent('control:' + c);
     return true;
@@ -921,27 +927,15 @@ export class Game {
     this.afterChange();
   }
 
-  cycleMajor(n: Node): void {
-    // rotate the major axis among arm pairs
-    const arms = n.arms;
-    const pairs: [number, number][] = [];
-    for (let i = 0; i < arms.length; i++) for (let j = i + 1; j < arms.length; j++) pairs.push([arms[i].road.id, arms[j].road.id]);
-    const cur = [...n.majorRoads].sort().join(',');
-    let idx = pairs.findIndex((p) => [...p].sort().join(',') === cur);
-    // prefer roughly opposite pairs
-    const good = pairs.filter(([a, b]) => {
-      const A = arms.find((x) => x.road.id === a)!;
-      const B = arms.find((x) => x.road.id === b)!;
-      const d = Math.abs(Math.abs(Math.atan2(Math.sin(B.angle - A.angle), Math.cos(B.angle - A.angle))) - Math.PI);
-      return d < 1.0;
-    });
-    const list = good.length ? good : pairs;
-    idx = list.findIndex((p) => [...p].sort().join(',') === cur);
-    const next = list[(idx + 1) % list.length];
+  /** make the road through arms a and b (straight on or turning) the major road of a priority junction */
+  setMajor(n: Node, a: Arm, b: Arm): void {
+    const next = [a.road.id, b.road.id];
+    if (n.majorRoads.size === 2 && next.every((id) => n.majorRoads.has(id))) return;
     if (!this.pay(COST.priority, n.x, n.y)) return;
     n.majorRoads = new Set(next);
     this.sim.rebuildNode(n);
     this.renderer.world.refresh();
+    this.renderer.overlays.setSelection(this.selection);
     this.afterChange();
   }
 
@@ -960,12 +954,14 @@ export class Game {
     const cost = mode === 'actuated' ? COST.actuated : mode === 'smart' ? COST.smart : 0;
     if (!this.pay(cost, n.x, n.y)) return;
     s.mode = mode;
+    // the AI starts from a plan fitted to recent traffic and refines it every cycle
+    if (mode === 'smart') s.autoTime();
     this.afterChange();
   }
 
   setPhaseDur(n: Node, i: number, sec: number): void {
     const s = n.signal;
-    if (!s || !s.phases[i]) return;
+    if (!s || !s.phases[i] || s.mode === 'smart') return;
     s.phases[i].dur = clamp(Math.round(sec), 4, 90);
     this.afterChange(false);
   }
@@ -1001,40 +997,33 @@ export class Game {
   }
 
   /** coordinate signals along the main road through this junction */
-  greenWave(n: Node): void {
-    if (!n.signal) return;
-    if (!this.pay(COST.greenwave, n.x, n.y)) return;
-    // pick the straightest major road through n
-    const arms = n.arms.filter((a) => a.road.cls !== 'local');
-    const road = (arms[0] ?? n.arms[0]).road;
-    const name = road.name;
-    const chain = this.city.net.nodes.filter((m) => m.signal && m.arms.some((a) => a.road.name === name));
-    if (chain.length < 2) return;
-    const cycle = Math.max(...chain.map((m) => m.signal!.cycleLength));
-    // order along the road direction
-    const dir = { x: road.b.x - road.a.x, y: road.b.y - road.a.y };
-    const L = Math.hypot(dir.x, dir.y) || 1;
-    dir.x /= L;
-    dir.y /= L;
-    chain.sort((a, b) => a.x * dir.x + a.y * dir.y - (b.x * dir.x + b.y * dir.y));
-    const v = road.speed * 0.85;
-    const p0 = chain[0];
-    for (const m of chain) {
-      const s = m.signal!;
-      s.mode = 'fixed';
-      // stretch the green of the phase serving this road so all cycles match
-      const extra = cycle - s.cycleLength;
-      const idx = s.phases.findIndex((p) => p.arms.some((a) => a.road.name === name));
-      if (idx >= 0) s.phases[idx].dur += extra;
-      else s.phases[0].dur += extra;
-      const d = Math.hypot(m.x - p0.x, m.y - p0.y);
-      let pre = 0;
-      for (let i = 0; i < Math.max(0, idx); i++) pre += s.phases[i].dur + s.yellow + s.allRed;
-      s.offset = (((d / v - pre) % cycle) + cycle) % cycle;
-      s.coord = true;
+  /** start or stop the green wave along a street through this junction */
+  toggleWave(n: Node, street: string): void {
+    const w = this.sim.waves;
+    if (w.get(street)) {
+      w.remove(street);
+      Audio.click();
+    } else {
+      if (!this.pay(COST.greenwave, n.x, n.y)) return;
+      w.add(street);
+      this.ui?.toast(t('waveOn', { r: street }), 'good');
     }
-    this.ui?.toast(`${t('greenWave')}: ${name} (${chain.length})`, 'good');
+    w.update(0, this.sim.signalNodes);
+    this.refreshWaveOverlay();
     this.afterChange();
+  }
+
+  setWaveDir(street: string, dir: number): void {
+    this.sim.waves.setDir(street, dir);
+    this.sim.waves.update(0, this.sim.signalNodes);
+    this.afterChange();
+  }
+
+  /** highlight the green-wave streets through the selected junction */
+  refreshWaveOverlay(): void {
+    const s = this.selection;
+    const roads = s && s.kind === 'node' ? this.sim.waves.at(s.node).flatMap((c) => this.sim.waves.span(c)) : [];
+    this.renderer.overlays.setWaves(roads);
   }
 
   laneOptions(lane: Lane): number[] {

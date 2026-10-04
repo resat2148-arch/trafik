@@ -39,6 +39,8 @@ export interface RunSave {
   arrows: [number, number, number][]; // linkId, laneIndex, mask
   totalTrips: number;
   stars: number[];
+  /** green-wave streets; missing in older saves */
+  waves?: { name: string; dir: number }[];
 }
 
 export interface CityProgress {

@@ -5,9 +5,14 @@
 //   leftlead – protected left-turn phase before each through phase
 //   split    – every approach gets its own phase (no conflicts at all)
 // Modes:
-//   fixed    – fixed green times (optionally coordinated with an offset)
-//   actuated – detector based gap-out / max-out, skips phases without demand
-//   smart    – adaptive max-pressure selection of the next phase
+//   fixed    – fixed green times
+//   actuated – detectors end a green once its queue is served (gap-out) or at the
+//              configured maximum (max-out) and skip phases nobody waits for
+//   smart    – actuated, and after every green it re-plans that phase's green time
+//              from the traffic it measured (served + still waiting on the busiest lane)
+// A signal on a green-wave street is coordinated: it follows a common cycle with an
+// offset, the phase serving the street starts on schedule and side phases end at fixed
+// force-off points (actuated / smart side phases may still end early and hand the time back).
 
 import { normAngle } from '../core/math.ts';
 import { Conn, Node, SIG_G, SIG_NONE, SIG_P, SIG_R, SIG_Y } from './network.ts';
@@ -18,12 +23,22 @@ export type SigMode = 'fixed' | 'actuated' | 'smart';
 
 export interface Phase {
   green: Map<Conn, number>;
-  dur: number; // configured green time (fixed mode) / max green (actuated)
+  /** fixed: green time; actuated: maximum green; smart: green time planned by the controller */
+  dur: number;
   arms: Arm[]; // approaches that get green in this phase
   kind: 'all' | 'left' | 'through';
   // runtime statistics
-  lastServed: number;
-  served: number;
+  lastServed: number; // sim time this phase last ended
+  served: number; // vehicles that entered during the current / last green
+  lastGreen: number; // length of the last green actually given
+  laneServed: Map<Lane, number>; // vehicles served per approach lane during the current green
+}
+
+/** green-wave coordination handed to a signal by its street corridor */
+export interface CoordPlan {
+  cycle: number; // common cycle length of the corridor
+  offset: number; // when (mod cycle) the coordinated phase starts
+  phase: number; // index of the phase serving the street
 }
 
 export interface SignalSave {
@@ -32,9 +47,12 @@ export interface SignalSave {
   durs: number[];
   yellow: number;
   allRed: number;
-  offset: number;
-  coord: boolean;
+  /** older saves: one-off green wave settings, now replaced by street corridors */
+  offset?: number;
+  coord?: boolean;
 }
+
+const mod = (a: number, m: number): number => ((a % m) + m) % m;
 
 export class SignalCtrl {
   node: Node;
@@ -47,14 +65,15 @@ export class SignalCtrl {
   t = 0;
   yellow = 3.5;
   allRed = 1.5;
-  offset = 0;
-  coord = false;
+  /** set by the green-wave corridor this signal belongs to */
+  coord: CoordPlan | null = null;
+  /** sim time the current green must end at in coordinated operation */
+  forceOff = 0;
   /** sim time of the last red onset per conn (for red-runner logic) */
   redSince = new Map<Conn, number>();
-  private extend = 0;
   preemptConn: Conn | null = null;
   preemptT = 0;
-  cycleStart = 0;
+  private now = 0;
 
   constructor(node: Node, plan: PlanType = 'two', mode: SigMode = 'fixed') {
     this.node = node;
@@ -100,7 +119,7 @@ export class SignalCtrl {
     const conns = this.node.conns;
     const byArm = (arm: Arm): Conn[] => conns.filter((c) => c.inArm === arm);
     const phases: Phase[] = [];
-    const mk = (arms: Arm[], kind: Phase['kind']): Phase => ({ green: new Map(), dur: 20, arms, kind, lastServed: 0, served: 0 });
+    const mk = (arms: Arm[], kind: Phase['kind']): Phase => ({ green: new Map(), dur: 20, arms, kind, lastServed: 0, served: 0, lastGreen: 0, laneServed: new Map() });
     let plan = this.plan;
     if (this.node.arms.length > 4 && plan === 'two') plan = 'split';
     const axes = this.axes();
@@ -145,12 +164,15 @@ export class SignalCtrl {
     // a single-approach "axis" with nothing to conflict gets protected movements;
     // with 2 phases, through roads get a slightly longer green by default
     if (keepDurations && old.length === phases.length) phases.forEach((p, i) => (p.dur = old[i]));
+    for (const p of phases) p.lastGreen = p.dur;
     this.phases = phases;
     this.cur = 0;
     this.next = phases.length > 1 ? 1 : 0;
     this.state = 'G';
     this.t = 0;
-    this.apply(0);
+    if (this.coord && this.coord.phase >= phases.length) this.coord = null;
+    if (phases.length) this.startGreen(phases[0], this.now);
+    this.apply(this.now);
   }
 
   setPlan(plan: PlanType): void {
@@ -166,16 +188,18 @@ export class SignalCtrl {
   }
 
   update(dt: number, time: number): void {
+    this.now = time;
     if (this.phases.length === 0) return;
     this.t += dt;
     const ph = this.phases[this.cur];
     if (this.state === 'G') {
       if (this.shouldEnd(ph, time)) {
-        this.next = this.pickNext();
+        this.next = this.pickNext(time);
         if (this.next === this.cur) {
-          // no other demand: rest in green
-          this.t = Math.min(this.t, ph.dur * 0.5);
+          // nobody else is waiting: rest in green, timers restart when someone arrives
+          this.t = Math.min(this.t, this.minGreen(ph));
         } else {
+          this.endGreen(ph, time);
           this.state = 'Y';
           this.t = 0;
           for (const c of ph.green.keys()) if (!this.phases[this.next].green.has(c)) this.redSince.set(c, time + this.yellow);
@@ -187,26 +211,117 @@ export class SignalCtrl {
         this.t = 0;
       }
     } else if (this.t >= this.allRed) {
-      const prev = this.cur;
       this.cur = this.next;
       this.state = 'G';
       this.t = 0;
-      this.extend = 0;
-      this.phases[prev].lastServed = time;
-      if (this.cur === 0) this.cycleStart = time;
-      if (this.mode === 'fixed' && this.coord && this.cur === 0) this.syncOffset(time);
+      this.startGreen(this.phases[this.cur], time);
     }
     if (this.preemptT > 0) this.preemptT -= dt;
     this.apply(time);
   }
 
-  private syncOffset(time: number): void {
-    const C = this.cycleLength;
-    if (C <= 0) return;
-    let err = (((time - this.offset) % C) + C) % C; // how far into the cycle we are
-    if (err > C / 2) err -= C;
-    // shorten / lengthen this phase green to drift towards the target
-    this.extend = Math.max(-this.phases[0].dur * 0.3, Math.min(this.phases[0].dur * 0.3, -err));
+  /** a vehicle crossed the stop line onto connector c */
+  onEnter(c: Conn, from: Lane): void {
+    const ph = this.phases[this.cur];
+    if (!ph || this.state === 'AR' || !ph.green.has(c)) return;
+    ph.served++;
+    ph.laneServed.set(from, (ph.laneServed.get(from) ?? 0) + 1);
+  }
+
+  private minGreen(ph: Phase): number {
+    return ph.kind === 'left' ? 4 : 6;
+  }
+
+  /** longest green a phase may get in the current mode */
+  maxGreen(ph: Phase): number {
+    return this.mode === 'smart' ? Math.round(ph.dur * 1.25 + 2) : ph.dur;
+  }
+
+  private startGreen(ph: Phase, time: number): void {
+    ph.served = 0;
+    ph.laneServed.clear();
+    if (this.coord) this.forceOff = time + this.allowance(this.cur, time);
+  }
+
+  private endGreen(ph: Phase, time: number): void {
+    ph.lastGreen = this.t;
+    ph.lastServed = time;
+    if (this.mode === 'smart') this.learn(ph);
+  }
+
+  /**
+   * Smart mode: plan the next green of a phase from what this one had to serve.
+   * Critical lane volume (served on green + still queued) at a saturation headway of
+   * 2.3 s plus start-up loss and a 15 % reserve; smoothed so timings settle.
+   */
+  private learn(ph: Phase): void {
+    let crit = 0;
+    const lanes = new Set<Lane>();
+    for (const c of ph.green.keys()) if (c.fromLane) lanes.add(c.fromLane);
+    for (const l of lanes) {
+      let waiting = 0;
+      for (const v of l.vehs) {
+        const want = v.plan[0];
+        if (l.len - v.s < 80 && want instanceof Conn && ph.green.has(want)) waiting++;
+      }
+      crit = Math.max(crit, (ph.laneServed.get(l) ?? 0) + waiting);
+    }
+    const need = 3 + crit * 2.3 * 1.15;
+    const lo = ph.kind === 'left' ? 5 : 7;
+    ph.dur = Math.round(Math.max(lo, Math.min(60, ph.dur * 0.6 + need * 0.4)));
+  }
+
+  /** green windows of a coordinated schedule (cycle time 0 = start of the coordinated phase) */
+  schedule(plan: CoordPlan | null = this.coord): { start: number[]; end: number[] } {
+    const n = this.phases.length;
+    const start = new Array<number>(n).fill(0);
+    const end = new Array<number>(n).fill(0);
+    if (!plan || n === 0) return { start, end };
+    const k = plan.phase;
+    const lost = this.yellow + this.allRed;
+    let side = 0;
+    for (let j = 0; j < n; j++) if (j !== k) side += this.phases[j].dur;
+    end[k] = Math.max(this.phases[k].dur, plan.cycle - side - n * lost);
+    let tt = end[k];
+    for (let m = 1; m < n; m++) {
+      const j = (k + m) % n;
+      start[j] = tt + lost;
+      end[j] = start[j] + this.phases[j].dur;
+      tt = end[j];
+    }
+    return { start, end };
+  }
+
+  /** called by the green-wave manager; a changed plan re-times the running green */
+  setCoord(plan: CoordPlan | null): void {
+    const was = this.coord;
+    this.coord = plan && plan.phase < this.phases.length ? plan : null;
+    const p = this.coord;
+    if (!p) return;
+    const moved = !was || was.phase !== p.phase || was.cycle !== p.cycle || Math.abs(mod(was.offset - p.offset + p.cycle / 2, p.cycle) - p.cycle / 2) > 1;
+    const ph = this.phases[this.cur];
+    if (moved && this.state === 'G' && ph) this.forceOff = Math.max(this.now - this.t + this.minGreen(ph), this.now + this.allowance(this.cur, this.now));
+  }
+
+  /**
+   * Green left in phase i's window of the coordinated schedule if it starts at `time`:
+   * a green that starts late gets less, one that starts early gets more.
+   */
+  private windowLeft(i: number, time: number): number {
+    const co = this.coord!;
+    const C = co.cycle;
+    const sch = this.schedule();
+    const late = mod(time - co.offset - sch.start[i] + C / 2, C) - C / 2;
+    return sch.end[i] - sch.start[i] - late;
+  }
+
+  /** green time phase i may run when it starts now, following the coordinated schedule */
+  private allowance(i: number, time: number): number {
+    const ph = this.phases[i];
+    const left = this.windowLeft(i, time);
+    // the street phase absorbs timing errors (at most half a cycle when early, down to a short green when late)
+    if (i === this.coord!.phase) return Math.max(Math.min(10, ph.dur), left);
+    return Math.max(this.minGreen(ph), Math.min(left, ph.dur * 1.5 + 5));
   }
 
   private shouldEnd(ph: Phase, time: number): boolean {
@@ -215,53 +330,35 @@ export class SignalCtrl {
       if (ph.green.has(this.preemptConn)) return false;
       return this.t > 3;
     }
-    if (this.mode === 'fixed') return this.t >= ph.dur + this.extend;
-    const minG = 6;
-    const maxG = this.mode === 'smart' ? Math.max(ph.dur, 20) * 1.8 : ph.dur * 1.6;
-    if (this.t < minG) return false;
-    const otherDemand = this.phases.some((p, i) => i !== this.cur && this.phaseDemand(p) > 0);
-    if (!otherDemand) return false;
-    if (this.t >= maxG) return true;
-    const gap = this.mode === 'smart' ? 2.2 : 3.0;
-    if (!this.arriving(ph, gap)) return true;
-    if (this.mode === 'smart') {
-      // max-pressure: switch if another phase has much more queued demand
-      const here = this.phaseDemand(ph);
-      let best = 0;
-      this.phases.forEach((p, i) => {
-        if (i !== this.cur) best = Math.max(best, this.phaseDemand(p) + (time - p.lastServed) * 0.05);
-      });
-      if (best > here * 2.5 + 4 && this.t > minG + 4) return true;
+    const minG = this.minGreen(ph);
+    const gap = this.mode === 'smart' ? 2.5 : 3.0;
+    if (this.coord) {
+      if (time >= this.forceOff) return true;
+      // the street phase keeps its green until the force-off; actuated side phases may gap out
+      if (this.mode === 'fixed' || this.cur === this.coord.phase) return false;
+      return this.t >= minG && !this.arriving(ph, gap);
     }
-    return false;
+    if (this.mode === 'fixed') return this.t >= ph.dur;
+    if (this.t < minG) return false;
+    if (this.t >= this.maxGreen(ph)) return true;
+    return !this.arriving(ph, gap);
   }
 
-  private pickNext(): number {
+  private pickNext(time: number): number {
     const n = this.phases.length;
     if (this.preemptConn && this.preemptT > 0) {
       const idx = this.phases.findIndex((p) => p.green.has(this.preemptConn!));
       if (idx >= 0) return idx;
     }
     if (this.mode === 'fixed') return (this.cur + 1) % n;
-    if (this.mode === 'smart') {
-      let best = -1;
-      let bestV = 0;
-      for (let i = 0; i < n; i++) {
-        if (i === this.cur) continue;
-        const d = this.phaseDemand(this.phases[i]);
-        if (d <= 0) continue;
-        const v = d;
-        if (v > bestV) {
-          bestV = v;
-          best = i;
-        }
-      }
-      return best >= 0 ? best : this.cur;
-    }
-    for (let k = 1; k <= n; k++) {
+    // detectors: the next phase in the ring somebody waits for; empty phases are skipped
+    const startAt = time + this.yellow + this.allRed;
+    for (let k = 1; k < n; k++) {
       const i = (this.cur + k) % n;
-      if (i === this.cur) break;
-      if (this.phaseDemand(this.phases[i]) > 0) return i;
+      if (this.coord && i === this.coord.phase) return i;
+      if (this.phaseDemand(this.phases[i]) <= 0) continue;
+      if (this.coord && this.windowLeft(i, startAt) < this.minGreen(this.phases[i])) continue;
+      return i;
     }
     return this.cur;
   }
@@ -295,6 +392,8 @@ export class SignalCtrl {
         const d = lane.len - v.s;
         if (d > 60) break;
         if (v.plan[0] !== c) continue;
+        // a queue over the stop-line detector keeps calling; others must arrive within the gap
+        if (d < 25 && v.v < 3) return true;
         if (d < 4 || d / Math.max(v.v, 0.5) < gap) return true;
       }
     }
@@ -320,15 +419,6 @@ export class SignalCtrl {
       if (s === SIG_R && c.sig !== SIG_R && c.sig !== SIG_Y) this.redSince.set(c, time);
       c.sig = s;
     }
-  }
-
-  /** Remaining green+yellow time for a conn (for driver anticipation); -1 when not green */
-  timeToRed(c: Conn): number {
-    if (c.sig === SIG_Y) return this.yellow - this.t;
-    if (c.sig !== SIG_G && c.sig !== SIG_P) return -1;
-    if (this.state !== 'G') return this.yellow;
-    const ph = this.phases[this.cur];
-    return Math.max(0, ph.dur - this.t) + this.yellow;
   }
 
   /**
@@ -374,8 +464,6 @@ export class SignalCtrl {
       durs: this.phases.map((p) => p.dur),
       yellow: this.yellow,
       allRed: this.allRed,
-      offset: this.offset,
-      coord: this.coord,
     };
   }
 
@@ -384,8 +472,6 @@ export class SignalCtrl {
     this.mode = s.mode;
     this.yellow = s.yellow;
     this.allRed = s.allRed;
-    this.offset = s.offset;
-    this.coord = s.coord;
     this.rebuild(false);
     if (s.durs.length === this.phases.length) this.phases.forEach((p, i) => (p.dur = s.durs[i]));
   }

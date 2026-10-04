@@ -30,10 +30,11 @@ mutlu tutmalısın — memnuniyet sıfıra düşerse kovulursun.
 
 | Araç | Ne yapar |
 | --- | --- |
-| Öncelikli yol / dur / yol ver | Ana yolu seç, yan yollara DUR veya YOL VER levhası |
+| Öncelikli yol / dur / yol ver | Ana yolu oluşturan iki kolu seç (düz ya da köşeden dönen ana yol), yan yollara DUR veya YOL VER levhası |
 | Dört yönlü dur | Varış sırasına göre (FIFO) geçiş |
-| Trafik ışığı | İki fazlı, öncelikli sol, ayrık fazlar; sabit / tetiklemeli / akıllı (max-pressure) mod |
-| Faz ayarı | Faz yeşil süreleri, tüm-kırmızı süresi, otomatik Webster zamanlama, yeşil dalga |
+| Trafik ışığı | İki fazlı, öncelikli sol, ayrık fazlar; sabit süreler, sensörlü (kuyruk bitince yeşili erken bitirir, boş fazı atlar; kaydırıcı en uzun yeşil) veya Akıllı YZ (her yeşili ölçüp bir sonrakini trafiğe göre kendisi planlar) |
+| Faz ayarı | Faz yeşil süreleri, tüm-kırmızı süresi, otomatik Webster zamanlama |
+| Yeşil dalga | Bir caddedeki tüm ışıkları ortak döngü ve mesafeye göre ofsetle eşgüdümler; yön otomatik (yoğun yön) veya sabit. Açık kaldığı sürece yeni ışıklar katılır, süre değişikliklerine uyum sağlar |
 | Kırmızıda sağa dönüş, sarı kutu | Kavşak tıkamayı önler |
 | Göbekli kavşak | Döner kavşak (girişte yol ver, ada, ayırıcı adalar) |
 | Şerit okları | Her şeridin dönüş izinleri (ayrı sol/sağ dönüş şeritleri) |
@@ -49,7 +50,8 @@ mutlu tutmalısın — memnuniyet sıfıra düşerse kovulursun.
   ~1600 araç/saat/şerit doygun akım).
 - **Şerit değiştirme:** MOBIL; rota için zorunlu şerit seçimi, fermuar usulü birleşmede
   işbirliği (öndeki boşluğu açma), sağ şerit eğilimi, bir sonraki kavşak için ön konumlanma.
-- **Kavşaklar:** Geometrik çakışma bölgeleri; ışık (sarıda ikilem bölgesi, kırmızı ihlali),
+- **Kavşaklar:** Geometrik çakışma bölgeleri; öncelikte üç sınıf (ana yolu izleyen > ana yoldan
+  ayrılan > yan yoldan gelen); ışık (sarıda ikilem bölgesi, kırmızı ihlali),
   izinli sola dönüşte kavşak içinde bekleme, dur/yol ver boşluk kabulü (sabırsızlıkla küçülen
   kabul edilebilir boşluk), kavşağı tıkamama kuralı, döner kavşakta içerideki araç önceliği.
 - **Rota:** Canlı seyahat süreleriyle Dijkstra, ana arter tercihi, navigasyon uygulaması

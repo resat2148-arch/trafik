@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import type { V2 } from '../core/math.ts';
 import { clamp } from '../core/math.ts';
+import { Path } from '../core/path.ts';
 import { GeoBuilder } from './geo.ts';
 import { iconTexture } from './textures.ts';
 import type { Lane, Network, Node, Road } from '../sim/network.ts';
@@ -23,6 +24,7 @@ export class Overlays {
   private traffic: THREE.Mesh | null = null;
   private ranges: LaneRange[] = [];
   trafficOn = false;
+  private waveSel: THREE.Mesh | null = null;
   private sel: THREE.Mesh;
   private hover: THREE.Mesh;
   private roadSel: THREE.Mesh | null = null;
@@ -154,6 +156,22 @@ export class Overlays {
     col.needsUpdate = true;
   }
 
+  /** green band along the green-wave streets of the selected junction */
+  setWaves(roads: Road[]): void {
+    if (this.waveSel) {
+      this.group.remove(this.waveSel);
+      this.waveSel.geometry.dispose();
+      this.waveSel = null;
+    }
+    if (!roads.length) return;
+    const gb = new GeoBuilder();
+    gb.setRGB(0.24, 0.92, 0.48);
+    for (const r of roads) gb.ribbon(r.center.points(), 2.4, 0.11);
+    this.waveSel = new THREE.Mesh(gb.build(), new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, transparent: true, opacity: 0.6, depthWrite: false }));
+    this.waveSel.renderOrder = 4;
+    this.group.add(this.waveSel);
+  }
+
   setSelection(s: Selection): void {
     this.selection = s;
     if (this.roadSel) {
@@ -171,6 +189,21 @@ export class Overlays {
       this.roadSel = new THREE.Mesh(gb.build(), new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, transparent: true, opacity: 0.9, depthWrite: false }));
       this.roadSel.renderOrder = 5;
       this.group.add(this.roadSel);
+    } else if (s && s.kind === 'node' && s.node.control === 'priority') {
+      // the major road through a priority junction (it may turn a corner)
+      const n = s.node;
+      const major = n.arms.filter((a) => n.majorRoads.has(a.road.id));
+      if (major.length === 2) {
+        const [A, B] = major;
+        const at = (a: typeof A, d: number): V2 => ({ x: n.x + a.dir.x * d, y: n.y + a.dir.y * d });
+        const path = Path.bezier(at(A, A.trim + 8), at(A, A.trim * 0.3), at(B, B.trim * 0.3), at(B, B.trim + 8));
+        const gb = new GeoBuilder();
+        gb.setRGB(1, 0.76, 0.23);
+        gb.ribbon(path.points(), 2.4, 0.1);
+        this.roadSel = new THREE.Mesh(gb.build(), new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, transparent: true, opacity: 0.55, depthWrite: false }));
+        this.roadSel.renderOrder = 5;
+        this.group.add(this.roadSel);
+      }
     }
     if (!s || s.kind !== 'vehicle') this.clearRoute();
   }
