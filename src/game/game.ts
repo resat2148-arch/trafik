@@ -3,6 +3,7 @@
 import { clamp, dist } from '../core/math.ts';
 import { RNG } from '../core/rng.ts';
 import { PRESETS, generateCity, pickMajorAxis } from '../world/citygen.ts';
+import { generateGrowthCity, growthLevel } from '../world/growth.ts';
 import type { Building, City, CityPreset } from '../world/citygen.ts';
 import { Sim } from '../sim/sim.ts';
 import type { SimEvent } from '../sim/sim.ts';
@@ -17,9 +18,9 @@ import { GameRenderer } from '../render/renderer.ts';
 import type { QualityLevel } from '../render/renderer.ts';
 import type { Selection } from '../render/overlays.ts';
 import { DAY_LENGTH, hourAt, timeAtHour } from './clock.ts';
-import { COST, POLICIES, UPKEEP, dayConfig, starsFor, tripScore, unlocksFor } from './config.ts';
+import { COST, POLICIES, SCORE, STAR2, STAR3, UPKEEP, dayConfig, growthDayConfig, scoreStars, starsFor, tripPoints, tripScore, unlocksFor } from './config.ts';
 import type { DayConfig, Unlock } from './config.ts';
-import { loadSave, snapshotNetwork, storeSave } from './save.ts';
+import { loadSave, snapshotNetwork, storeSave, translateNetwork } from './save.ts';
 import type { RunSave, SaveData } from './save.ts';
 import { t } from './i18n.ts';
 import type { StrKey } from './i18n.ts';
@@ -56,6 +57,34 @@ export interface DayStats {
   minSat: number;
 }
 
+/** growing city: where the day's score came from */
+export interface ScoreParts {
+  trips: number;
+  tripCount: number;
+  emergency: number;
+  crashes: number;
+  abandoned: number;
+  blocked: number;
+}
+
+export interface Report {
+  avg: number;
+  stars: number;
+  upkeep: number;
+  grant: number;
+  doubled: boolean;
+  /** growing city */
+  score?: number;
+  target?: number;
+  passed?: boolean;
+  record?: boolean;
+  prevBest?: number;
+}
+
+function emptyParts(): ScoreParts {
+  return { trips: 0, tripCount: 0, emergency: 0, crashes: 0, abandoned: 0, blocked: 0 };
+}
+
 export interface Incident {
   id: number;
   vehicles: Vehicle[];
@@ -88,6 +117,26 @@ function emptyStats(): DayStats {
 }
 
 let INC_ID = 1;
+
+/** does a box (building or car park) stand where a road `slots` lanes wide plus a narrow sidewalk would be? */
+function crowdsRoad(r: Road, slots: number, cx: number, cy: number, hw: number, hh: number, ux: number, uy: number): boolean {
+  const need = (r.median + slots * laneWidthOf(r)) / 2 + 1.5;
+  if (r.center.project(cx, cy).d > need + Math.hypot(hw, hh)) return false;
+  const vx = -uy;
+  const vy = ux;
+  const steps = Math.max(2, Math.ceil(Math.max(hw, hh)));
+  for (let i = 0; i <= steps; i++) {
+    const f = (i / steps) * 2 - 1;
+    const pts = [
+      [cx + ux * hw * f + vx * hh, cy + uy * hw * f + vy * hh],
+      [cx + ux * hw * f - vx * hh, cy + uy * hw * f - vy * hh],
+      [cx + ux * hw + vx * hh * f, cy + uy * hw + vy * hh * f],
+      [cx - ux * hw + vx * hh * f, cy - uy * hw + vy * hh * f],
+    ];
+    for (const [x, y] of pts) if (r.center.project(x, y).d < need) return true;
+  }
+  return false;
+}
 
 export class Game {
   save: SaveData;
@@ -135,9 +184,26 @@ export class Game {
   private hotT = 0;
   private autosaveT = 0;
   tutorialActive = false;
+  /** growing city: the day's score so far and where it came from */
+  score = 0;
+  scoreParts: ScoreParts = emptyParts();
+  /** growing city: the level is over and the saved run already holds the next one */
+  private levelDone = false;
+  /** growing city: the new district is being shown (buildings rising, camera on it) */
+  revealing = false;
 
   constructor() {
     this.save = loadSave();
+  }
+
+  /** playing the growing city (its days are levels) */
+  get growth(): boolean {
+    return this.preset?.id === 'growth';
+  }
+
+  /** the saved run of the mode being played */
+  get runSave(): RunSave | null {
+    return this.growth ? this.save.growthRun : this.save.run;
   }
 
   quality(): QualityLevel {
@@ -162,9 +228,16 @@ export class Game {
 
   // ---------------------------------------------------------------- loading
 
-  loadCity(id: string, run: RunSave | null, menu = false): void {
-    this.preset = PRESETS.find((p) => p.id === id) ?? PRESETS[0];
-    this.city = generateCity(this.preset);
+  loadCity(id: string, run: RunSave | null, menu = false, reveal = !menu): void {
+    if (id === 'growth') {
+      // the level's part of the planned city
+      this.city = generateGrowthCity(run && run.city === id ? run.day : 1);
+      this.preset = this.city.preset;
+    } else {
+      this.preset = PRESETS.find((p) => p.id === id) ?? PRESETS[0];
+      this.city = generateCity(this.preset);
+    }
+    this.levelDone = false;
     this.sim = new Sim(this.city.net, (this.preset.seed * 7) | 0);
     this.sim.initJunctions();
     this.demand = new Demand(this.city, this.sim, this.preset.seed + 5);
@@ -193,9 +266,35 @@ export class Game {
       this.totalTrips = 0;
       this.starsHistory = [];
     }
+    if (this.growth) this.clearWidenedLots();
     this.renderer.setCity(this.city, this.sim, this.day);
     this.renderer.overlays.setSelection(null);
+    this.revealing = this.growth && reveal;
+    if (this.revealing) this.renderer.reveal(this.city);
     this.prepareDay();
+  }
+
+  /**
+   * Growing city: buildings of a newly built district keep clear of streets the player
+   * widened before the district existed.
+   */
+  private clearWidenedLots(): void {
+    const wide = this.city.net.roads.filter((r) => r.maxLanes > ROAD_SPECS[r.cls].maxLanes && !r.a.gateway && !r.b.gateway);
+    if (!wide.length) return;
+    // the same clearance a widening needs, so what stood beside the street when it was widened stays
+    const blocked = (cx: number, cy: number, hw: number, hh: number, ux: number, uy: number): boolean => wide.some((r) => crowdsRoad(r, r.maxLanes, cx, cy, hw, hh, ux, uy));
+    const keep = this.city.buildings.filter((b) => !blocked(b.x, b.y, b.w / 2, b.d / 2, b.ux, b.uy));
+    if (keep.length === this.city.buildings.length) return;
+    const fresh = this.city.growth?.fresh;
+    const nextFresh = new Set<number>();
+    keep.forEach((b, i) => {
+      if (fresh?.has(b.id)) nextFresh.add(i);
+      b.id = i;
+    });
+    this.city.buildings = keep;
+    if (this.city.growth) this.city.growth.fresh = nextFresh;
+    for (const bl of this.city.blocks) bl.parking = bl.parking.filter((pk) => !blocked(pk.cx, pk.cy, pk.hw, pk.hh, pk.ux, pk.uy));
+    for (const s of ['hospital', 'fireStation', 'police'] as const) if (this.city[s] && !keep.includes(this.city[s]!)) this.city[s] = null;
   }
 
   private applyNetwork(run: RunSave): void {
@@ -235,15 +334,19 @@ export class Game {
   }
 
   private prepareDay(): void {
-    this.cfg = dayConfig(this.preset, this.day);
+    this.cfg = this.growth ? growthDayConfig(this.day) : dayConfig(this.preset, this.day);
     this.unlocks = unlocksFor(this.preset, this.day);
+    // every level starts with fresh goodwill; only the score decides it
+    if (this.growth && !this.menuMode) this.sat = 70;
+    this.score = 0;
+    this.scoreParts = emptyParts();
     this.demand.setDay(this.day);
     this.demand.scale = this.cfg.demand * (this.policies.has('transit') ? 0.9 : 1);
     this.sim.aggressionBias = this.cfg.aggression - (this.policies.has('safety') ? 0.08 : 0);
     this.renderer.world?.setDay(this.day);
     this.dayT = this.menuMode ? timeAtHour(7.6) : 0;
     this.stats = emptyStats();
-    this.stats.newBuildings = this.city.buildings.filter((b) => b.day === this.day).length;
+    this.stats.newBuildings = this.growth ? this.city.growth?.fresh.size ?? 0 : this.city.buildings.filter((b) => b.day === this.day).length;
     this.stats.minSat = this.sat;
     this.rushNotified = { am: false, pm: false };
     this.rainNotified = false;
@@ -274,6 +377,8 @@ export class Game {
       this.demand.scale = keep;
       this.sim.stats.trips = 0;
     }
+    // departures that failed before the day started do not count against it
+    this.lastBlocked = this.demand.stats.blocked;
   }
 
   // ---------------------------------------------------------------- day flow
@@ -291,10 +396,8 @@ export class Game {
     if (p !== 'playing') Platform.gameplayStop();
   }
 
-  private endDay(): void {
-    const s = this.stats;
-    const avg = s.satTime > 0 ? s.satArea / s.satTime : this.sat;
-    const stars = starsFor(avg);
+  /** daily running costs of signals, roundabouts and policies */
+  private upkeep(): number {
     let upkeep = 0;
     for (const n of this.city.net.nodes) {
       if (n.control === 'signal' && n.signal) {
@@ -302,6 +405,18 @@ export class Game {
       } else if (n.control === 'roundabout') upkeep += UPKEEP.roundabout;
     }
     for (const p of POLICIES) if (this.policies.has(p.id)) upkeep += p.cost;
+    return upkeep;
+  }
+
+  private endDay(): void {
+    if (this.growth) {
+      this.endLevel();
+      return;
+    }
+    const s = this.stats;
+    const avg = s.satTime > 0 ? s.satArea / s.satTime : this.sat;
+    const stars = starsFor(avg);
+    const upkeep = this.upkeep();
     const grant = Math.round(1500 + avg * 45 + this.day * 250);
     this.report = { avg, stars, upkeep, grant, doubled: false };
     this.money += grant - upkeep;
@@ -328,10 +443,70 @@ export class Game {
     this.setPhase(complete ? 'complete' : 'report');
   }
 
-  report = { avg: 0, stars: 0, upkeep: 0, grant: 0, doubled: false };
+  report: Report = { avg: 0, stars: 0, upkeep: 0, grant: 0, doubled: false };
+
+  /** growing city: the level's day is over; reaching the score target opens the next district */
+  private endLevel(): void {
+    const lv = this.day;
+    const def = growthLevel(lv);
+    const s = this.stats;
+    const avg = s.satTime > 0 ? s.satArea / s.satTime : this.sat;
+    const stars = scoreStars(this.score, def.target);
+    const passed = stars > 0;
+    const prog = this.save.growth;
+    const prevBest = prog.best[lv - 1] ?? 0;
+    prog.best[lv - 1] = Math.max(prevBest, this.score);
+    prog.stars[lv - 1] = Math.max(prog.stars[lv - 1] ?? 0, stars);
+    let upkeep = 0;
+    let grant = 0;
+    if (passed) {
+      upkeep = this.upkeep();
+      grant = Math.round((2500 + this.score * 0.8 + lv * 500) / 10) * 10;
+      this.money += grant - upkeep;
+      prog.level = Math.max(prog.level, lv + 1);
+      this.starsHistory[lv - 1] = Math.max(this.starsHistory[lv - 1] ?? 0, stars);
+    }
+    this.report = { avg, stars, upkeep, grant, doubled: false, score: this.score, target: def.target, passed, record: prevBest > 0 && this.score > prevBest, prevBest };
+    if (passed) {
+      // the next level's city with everything the player built so far
+      this.save.growthRun = this.nextLevelRun();
+      this.save.lastMode = 'growth';
+      storeSave(this.save, true);
+      this.levelDone = true;
+      Audio.success();
+      if (stars >= 2) Platform.happytime();
+    } else {
+      this.persist(true);
+      Audio.fail();
+    }
+    this.setPhase('report');
+  }
+
+  /** the saved run that starts the next level: this network carried over onto the bigger city */
+  private nextLevelRun(): RunSave {
+    const next = generateGrowthCity(this.day + 1);
+    return {
+      city: 'growth',
+      day: this.day + 1,
+      money: Math.round(this.money),
+      sat: 70,
+      policies: [...this.policies],
+      preempt: this.preempt,
+      ...translateNetwork(snapshotNetwork(this.city.net), this.city, next),
+      totalTrips: this.totalTrips,
+      stars: this.starsHistory.slice(),
+      waves: this.sim.waves.corridors.map((c) => ({ name: c.name, dir: c.dir })),
+    };
+  }
 
   async nextDay(): Promise<void> {
     await Platform.midgame();
+    if (this.growth) {
+      // passed: the saved run is the next level; failed: play the level again
+      this.loadCity('growth', this.save.growthRun);
+      this.setPhase('intro');
+      return;
+    }
     this.prepareDay();
     this.setPhase('intro');
   }
@@ -342,7 +517,11 @@ export class Game {
     if (ok) {
       this.report.doubled = true;
       this.money += this.report.grant;
-      this.persist(true);
+      if (this.levelDone && this.save.growthRun) {
+        // the next level is already saved: the bonus goes with it
+        this.save.growthRun.money += this.report.grant;
+        storeSave(this.save, true);
+      } else this.persist(true);
       Audio.cash();
     }
     return ok;
@@ -350,8 +529,8 @@ export class Game {
 
   retryDay(): void {
     // reload the city from the saved run at the start of the day
-    const run = this.save.run;
-    this.loadCity(this.preset.id, run && run.city === this.preset.id ? run : null);
+    const run = this.runSave;
+    this.loadCity(this.preset.id, run && run.city === this.preset.id ? run : null, false, false);
     this.setPhase('intro');
   }
 
@@ -369,9 +548,9 @@ export class Game {
   }
 
   persist(immediate = false): void {
-    if (this.menuMode) return;
+    if (this.menuMode || this.levelDone) return;
     const snap = snapshotNetwork(this.city.net);
-    this.save.run = {
+    const run: RunSave = {
       city: this.preset.id,
       day: this.day,
       money: Math.round(this.money),
@@ -383,7 +562,25 @@ export class Game {
       stars: this.starsHistory,
       waves: this.sim.waves.corridors.map((c) => ({ name: c.name, dir: c.dir })),
     };
+    if (this.growth) this.save.growthRun = run;
+    else this.save.run = run;
+    this.save.lastMode = this.growth ? 'growth' : 'campaign';
     storeSave(this.save, immediate);
+  }
+
+  private addScore(part: keyof ScoreParts, pts: number, x?: number, y?: number): void {
+    if (!this.growth) return;
+    const before = this.score;
+    this.score += pts;
+    this.scoreParts[part] += pts;
+    // cheer when the target and the extra stars are reached
+    const target = growthLevel(this.day).target;
+    if (before < target && this.score >= target) {
+      this.ui?.toast(`🎯 ${t('targetReached')}`, 'good');
+      Audio.success();
+    } else if (before < target * STAR2 && this.score >= target * STAR2) this.ui?.toast(`⭐⭐ ${t('starReached', { n: 2 })}`, 'good');
+    else if (before < target * STAR3 && this.score >= target * STAR3) this.ui?.toast(`⭐⭐⭐ ${t('starReached', { n: 3 })}`, 'good');
+    if (x !== undefined && y !== undefined && Math.abs(pts) >= 20) this.ui?.floatText(x, y, `${pts > 0 ? '+' : ''}${pts} ★`, pts > 0 ? '#ffd166' : '#ff8a6b');
   }
 
   // ---------------------------------------------------------------- update
@@ -450,6 +647,8 @@ export class Game {
     switch (e.type) {
       case 'trip': {
         const score = tripScore(e.time, e.ff);
+        this.addScore('trips', tripPoints(e.time, e.ff));
+        this.scoreParts.tripCount++;
         this.sat += (score - this.sat) * 0.018;
         const toll = Math.round(3 + (score / 100) * 4);
         this.money += toll;
@@ -472,10 +671,12 @@ export class Game {
       case 'abandon':
         this.sat -= 0.9;
         this.stats.abandoned++;
+        this.addScore('abandoned', SCORE.abandon);
         break;
       case 'crash': {
         this.sat -= 2.5;
         this.stats.crashes++;
+        this.addScore('crashes', SCORE.crash, e.x, e.y);
         const where = e.node ? e.node.name : this.roadNameAt(e.vehicles[0]);
         const inc: Incident = { id: INC_ID++, vehicles: e.vehicles, x: e.x, y: e.y, age: 0, clearAfter: 150, tow: null, towWork: 0, where };
         this.incidents.push(inc);
@@ -504,10 +705,12 @@ export class Game {
           this.money += bonus;
           this.stats.income += bonus;
           this.sat = Math.min(100, this.sat + 1.5);
+          this.addScore('emergency', SCORE.emergencyFast, e.v.x, e.v.y);
           this.ui?.toast(t('ambulanceFast', { m: `$${bonus}` }), 'good');
           Audio.cash();
         } else {
           this.sat -= 3;
+          this.addScore('emergency', SCORE.emergencySlow, e.v.x, e.v.y);
           this.ui?.toast(t('ambulanceSlow'), 'warn');
         }
         break;
@@ -535,6 +738,7 @@ export class Game {
     const blocked = this.demand.stats.blocked;
     if (blocked > this.lastBlocked) {
       this.sat -= (blocked - this.lastBlocked) * 0.45;
+      this.addScore('blocked', (blocked - this.lastBlocked) * SCORE.blocked);
       this.lastBlocked = blocked;
     }
     this.sat = clamp(this.sat, 0, 100);
@@ -1079,26 +1283,8 @@ export class Game {
     for (const n of ends) computeCorners(n);
     if (short) return 'short';
     // buildings and car parks keep at least a narrow sidewalk
-    const need = (r.median + slots * laneWidthOf(r)) / 2 + 1.5;
-    const near = (cx: number, cy: number, hw: number, hh: number, ux: number, uy: number): boolean => {
-      if (r.center.project(cx, cy).d > need + Math.hypot(hw, hh)) return false;
-      const vx = -uy;
-      const vy = ux;
-      const steps = Math.max(2, Math.ceil(Math.max(hw, hh)));
-      for (let i = 0; i <= steps; i++) {
-        const f = (i / steps) * 2 - 1;
-        const pts = [
-          [cx + ux * hw * f + vx * hh, cy + uy * hw * f + vy * hh],
-          [cx + ux * hw * f - vx * hh, cy + uy * hw * f - vy * hh],
-          [cx + ux * hw + vx * hh * f, cy + uy * hw + vy * hh * f],
-          [cx - ux * hw + vx * hh * f, cy - uy * hw + vy * hh * f],
-        ];
-        for (const [x, y] of pts) if (r.center.project(x, y).d < need) return true;
-      }
-      return false;
-    };
-    for (const b of this.city.buildings) if (near(b.x, b.y, b.w / 2, b.d / 2, b.ux, b.uy)) return 'buildings';
-    for (const bl of this.city.blocks) for (const pk of bl.parking) if (near(pk.cx, pk.cy, pk.hw, pk.hh, pk.ux, pk.uy)) return 'buildings';
+    for (const b of this.city.buildings) if (crowdsRoad(r, slots, b.x, b.y, b.w / 2, b.d / 2, b.ux, b.uy)) return 'buildings';
+    for (const bl of this.city.blocks) for (const pk of bl.parking) if (crowdsRoad(r, slots, pk.cx, pk.cy, pk.hw, pk.hh, pk.ux, pk.uy)) return 'buildings';
     return null;
   }
 

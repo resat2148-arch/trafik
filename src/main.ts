@@ -32,8 +32,9 @@ async function main(): Promise<void> {
   await frame();
   const ui = new UI(game, document.getElementById('ui') as HTMLElement);
   game.ui = ui;
-  const menuCity = game.save.run?.city ?? 'maple';
-  game.loadCity(menuCity, game.save.run, true);
+  // the city played last stays behind the main menu
+  if (game.save.lastMode === 'growth' && game.save.growthRun) game.loadCity('growth', game.save.growthRun, true);
+  else game.loadCity(game.save.run?.city ?? 'maple', game.save.run, true);
   game.renderer.rig.autoOrbit = true;
   progress(0.9);
   await frame();

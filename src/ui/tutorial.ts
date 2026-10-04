@@ -46,7 +46,7 @@ export class Tutorial {
 
   onPhase(p: Phase): void {
     const g = this.game;
-    if (p === 'playing' && !g.save.tutorialDone && g.preset.id === 'maple' && g.day === 1 && this.step < 0) {
+    if (p === 'playing' && !g.save.tutorialDone && (g.preset.id === 'maple' || g.growth) && g.day === 1 && g.city.tutorialNode && this.step < 0) {
       this.step = 0;
       g.tutorialActive = true;
       this.show();

@@ -12,6 +12,7 @@ import { arcPoints, clipHalfPlane, offsetClosed, signedArea, simplifyClosed } fr
 import { Network, ROAD_SPECS } from '../sim/network.ts';
 import type { Arm, Link, Node, Road, RoadClass } from '../sim/network.ts';
 import { buildJunction, stronglyConnected, updateLinkNexts } from '../sim/junction.ts';
+import type { GrowthInfo } from './growth.ts';
 
 export type Zone = 'res' | 'com' | 'off' | 'ind' | 'park' | 'civic' | 'water';
 export type BKind =
@@ -106,6 +107,8 @@ export interface CityPreset {
   growth: number; // per-day demand growth
   startMoney: number;
   tutorialNode?: [number, number];
+  /** grid edges that must never be removed (h: along a row; i, j: grid index of its first node) */
+  protectEdge?: (h: boolean, i: number, j: number) => boolean;
 }
 
 export interface City {
@@ -123,6 +126,8 @@ export interface City {
   police: Building | null;
   tutorialNode: Node | null;
   grid: (Node | null)[][];
+  /** growing-city mode: how this level maps onto the planned city */
+  growth?: GrowthInfo;
 }
 
 const STREET_NAMES = [
@@ -318,6 +323,7 @@ export function generateCity(preset: CityPreset): City {
     if (onBoundary) continue;
     if ((degree.get(e.a) ?? 0) < 4 || (degree.get(e.b) ?? 0) < 4) continue;
     if (preset.river && (e.j === preset.river.afterRow || e.j === preset.river.afterRow + 1) && e.h) continue;
+    if (preset.protectEdge?.(e.h, e.i, e.j)) continue;
     e.keep = false;
     if (!connected(edges)) {
       e.keep = true;
@@ -645,7 +651,7 @@ export function blockCurb(face: { node: Node; armIn: Arm; armOut: Arm }[]): V2[]
   return simplifyClosed(pts, 0.05, 0.0005);
 }
 
-function buildBlocks(net: Network, river: River | null): Block[] {
+export function buildBlocks(net: Network, river: River | null): Block[] {
   const faces = faceWalk(net);
   const blocks: Block[] = [];
   for (const face of faces) {

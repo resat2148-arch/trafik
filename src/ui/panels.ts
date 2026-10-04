@@ -41,7 +41,8 @@ export class Panels {
   }
 
   private lockNote(u: Unlock): HTMLElement {
-    return h('div', { class: 'lock-note' }, svg(ICON.lock, 14), t('locked_feature', { n: unlockDay(this.game.preset, u) }));
+    const n = unlockDay(this.game.preset, u);
+    return h('div', { class: 'lock-note' }, svg(ICON.lock, 14), this.game.growth ? t('locked_level', { n }) : t('locked_feature', { n }));
   }
 
   render(): void {
@@ -138,7 +139,7 @@ export class Panels {
         },
         svg(icon, 30),
         h('span', { class: 'ctrl-name' }, t(`ctrl_${c}` as StrKey)),
-        lock ? h('span', { class: 'cost lock' }, svg(ICON.lock, 12), `${t('day')} ${unlockDay(g.preset, u)}`) : n.control === c ? h('span', { class: 'cost on' }, '✓') : h('span', { class: `cost ${g.canAfford(cost) ? '' : 'bad'}` }, money(cost)),
+        lock ? h('span', { class: 'cost lock' }, svg(ICON.lock, 12), `${g.growth ? t('level') : t('day')} ${unlockDay(g.preset, u)}`) : n.control === c ? h('span', { class: 'cost on' }, '✓') : h('span', { class: `cost ${g.canAfford(cost) ? '' : 'bad'}` }, money(cost)),
       );
       grid.append(b);
     }

@@ -4,9 +4,11 @@
 import type { Game, Phase } from '../game/game.ts';
 import { PRESETS } from '../world/citygen.ts';
 import type { CityPreset } from '../world/citygen.ts';
-import { getLang, money, setLang, t } from '../game/i18n.ts';
+import { getLang, money, num, setLang, t } from '../game/i18n.ts';
 import type { StrKey } from '../game/i18n.ts';
-import { COST, POLICIES, TUTORIAL_UNLOCKS, dayConfig } from '../game/config.ts';
+import { COST, POLICIES, STAR2, STAR3, TUTORIAL_UNLOCKS, dayConfig, growthDayConfig } from '../game/config.ts';
+import { GROWTH_LEVELS, growthLevel } from '../world/growth.ts';
+import type { Building } from '../world/citygen.ts';
 import { fmtHour } from '../game/clock.ts';
 import { storeSave, defaultSave } from '../game/save.ts';
 import { Audio } from '../audio/audio.ts';
@@ -71,16 +73,19 @@ export class Menus {
         this.mainMenu();
         break;
       case 'intro':
-        this.dayIntro();
+        if (this.game.growth) this.levelIntro();
+        else this.dayIntro();
         break;
       case 'report':
-        this.dayReport();
+        if (this.game.growth) this.levelReport();
+        else this.dayReport();
         break;
       case 'fired':
         this.fired();
         break;
       case 'complete':
-        this.complete();
+        if (this.game.growth) this.growthComplete();
+        else this.complete();
         break;
     }
   }
@@ -104,7 +109,16 @@ export class Menus {
     } else {
       btns.append(h('button', { class: 'btn big primary', onclick: () => this.startRun('maple', false) }, svg(ICON.play2, 26), t('play')));
     }
+    const gp = g.save.growth;
+    const gStars = gp.stars.reduce((a, b) => a + (b ?? 0), 0);
     btns.append(
+      h(
+        'button',
+        { class: 'btn big growth-btn', onclick: () => this.growthHub() },
+        h('span', { class: 'gb-ico' }, '🏗️'),
+        h('span', null, t('growthMode'), h('small', null, g.save.growthRun ? t('levelProgress', { n: g.save.growthRun.day, s: gStars }) : t('growthSub'))),
+        g.save.growthRun ? null : h('i', { class: 'new-tag' }, t('growthTag')),
+      ),
       h('button', { class: 'btn big', onclick: () => this.citySelect() }, svg(ICON.city, 22), t('cities')),
       h(
         'div',
@@ -130,9 +144,11 @@ export class Menus {
     Audio.unlock();
     Audio.click();
     const g = this.game;
-    const run = cont ? g.save.run : null;
+    const growth = id === 'growth';
+    const run = cont ? (growth ? g.save.growthRun : g.save.run) : null;
     if (!cont) {
-      g.save.run = null;
+      if (growth) g.save.growthRun = null;
+      else g.save.run = null;
     }
     this.clear();
     const loading = h('div', { class: 'loading-overlay' }, h('div', { class: 'spinner' }), t('loading'));
@@ -144,6 +160,57 @@ export class Menus {
       loading.remove();
       g.setPhase('intro');
     }, 30);
+  }
+
+  /** growing city: the career at a glance (levels, stars, best scores) */
+  growthHub(): void {
+    Audio.click();
+    const g = this.game;
+    const gp = g.save.growth;
+    const run = g.save.growthRun;
+    const totalStars = gp.stars.reduce((a, b) => a + (b ?? 0), 0);
+    const totalScore = gp.best.reduce((a, b) => a + (b ?? 0), 0);
+    const list = h('div', { class: 'lvl-list' });
+    const cur = run?.day ?? 1;
+    GROWTH_LEVELS.forEach((lv, i) => {
+      const n = i + 1;
+      const open = n <= Math.max(gp.level, cur);
+      const st = gp.stars[i] ?? 0;
+      list.append(
+        h(
+          'div',
+          { class: `lvl ${open ? '' : 'locked'} ${n === cur ? 'cur' : ''}` },
+          h('span', { class: 'lvl-num' }, open ? String(n) : svg(ICON.lock, 14)),
+          h('div', { class: 'lvl-info' }, h('b', null, lv.district[getLang()]), h('span', null, `${t('target')} ${num(lv.target)}${gp.best[i] ? ` · ${t('bestScore')} ${num(gp.best[i])}` : ''}`)),
+          h('span', { class: 'lvl-stars' }, ...[0, 1, 2].map((k) => h('i', { class: k < st ? 'on' : '' }, '★'))),
+        ),
+      );
+    });
+    // a second tap within a few seconds confirms
+    let armed = 0;
+    const restart = h('button', { class: 'btn danger', onclick: () => {
+      if (Date.now() - armed > 4000) {
+        armed = Date.now();
+        restart.textContent = t('confirmRestart');
+        return;
+      }
+      g.save.growthRun = null;
+      storeSave(g.save, true);
+      this.startRun('growth', false);
+    } }, t('restartCareer'));
+    this.modal(
+      'growth-hub',
+      h('div', { class: 'intro-city' }, '🏗️ ', t('growthMode')),
+      h('p', { class: 'hub-desc' }, t('growthDesc')),
+      h('div', { class: 'hub-stats' }, h('div', null, h('span', null, t('rankLbl')), h('b', null, t(rankKey(totalStars)))), h('div', null, h('span', null, t('stars')), h('b', null, `★ ${totalStars} / ${GROWTH_LEVELS.length * 3}`)), h('div', null, h('span', null, t('totalScore')), h('b', null, num(totalScore)))),
+      list,
+      h(
+        'div',
+        { class: 'col gap' },
+        h('button', { class: 'btn big primary', onclick: () => this.startRun('growth', !!run) }, svg(ICON.play2, 24), run ? t('continueLevel', { n: run.day }) : t('startCareer')),
+        h('div', { class: 'row center gap' }, run ? restart : null, h('button', { class: 'btn', onclick: () => this.closeTop() }, t('back'))),
+      ),
+    );
   }
 
   citySelect(): void {
@@ -209,6 +276,203 @@ export class Menus {
           this.clear();
           g.startDay();
         } }, svg(ICON.play, 22), t('start')),
+      ),
+    );
+  }
+
+  /** growing city: a level starts; first the new district is shown, then the briefing */
+  levelIntro(): void {
+    const g = this.game;
+    const lv = g.day;
+    const def = growthLevel(lv);
+    if (g.revealing) {
+      g.revealing = false;
+      const banner = h(
+        'div',
+        { class: 'district-banner' },
+        h('div', { class: 'db-level' }, t('levelN', { n: lv })),
+        h('div', { class: 'db-name' }, lv === 1 ? t('firstDistrict') : lv > GROWTH_LEVELS.length ? t('trafficGrows') : t('districtBuilt', { d: def.district[getLang()] })),
+      );
+      this.root.append(banner);
+      setTimeout(() => banner.classList.add('out'), 2600);
+      setTimeout(() => {
+        banner.remove();
+        if (g.phase === 'intro' && !this.stack.length) this.levelBriefing();
+      }, 3000);
+      return;
+    }
+    this.levelBriefing();
+  }
+
+  private levelBriefing(): void {
+    const g = this.game;
+    const lv = g.day;
+    const def = growthLevel(lv);
+    const cfg = growthDayConfig(lv);
+    const gp = g.save.growth;
+    const fresh = g.city.growth?.fresh;
+    const items: HTMLElement[] = [];
+    if (fresh?.size && lv <= GROWTH_LEVELS.length) {
+      const mix = buildingMix(g.city.buildings.filter((b) => fresh.has(b.id)));
+      items.push(h('div', { class: 'intro-row' }, svg(ICON.city, 22), h('span', null, t('newDistrict'), h('em', { class: 'mix' }, mix)), h('b', null, def.district[getLang()])));
+    } else {
+      items.push(h('div', { class: 'intro-row' }, svg(ICON.city, 22), h('span', null, t('cityGrown')), h('b', null, def.district[getLang()])));
+    }
+    const fc: string[] = [];
+    if (cfg.rain) fc.push(t('rainForecast', { h: `${fmtHour(cfg.rain[0])}–${fmtHour(cfg.rain[1])}` }));
+    if (cfg.event) fc.push(t('eventForecast', { e: `${fmtHour(cfg.event.hour)}` }));
+    items.push(h('div', { class: 'intro-row' }, svg(cfg.rain ? ICON.rain : ICON.sun, 22), h('span', null, t('forecast')), h('b', null, fc.length ? fc.join(' · ') : t('clearSky'))));
+    const unlockedNow = TUTORIAL_UNLOCKS[lv] ?? [];
+    const chips = unlockedNow.length
+      ? h('div', { class: 'unlock-box' }, h('div', { class: 'unlock-title' }, '🔓 ', t('unlocked')), h('div', { class: 'chips' }, ...unlockedNow.map((u) => h('span', { class: 'chip-u' }, t(UNLOCK_NAMES[u] ?? 'phases')))))
+      : null;
+    const best = gp.best[lv - 1];
+    const n = GROWTH_LEVELS.length;
+    this.modal(
+      'intro',
+      h('div', { class: 'intro-city' }, t('growthMode')),
+      h('div', { class: 'intro-day' }, t('levelN', { n: lv }), lv <= n ? h('span', { class: 'of' }, ` / ${n}`) : null),
+      h('div', { class: 'day-dots' }, ...Array.from({ length: n }, (_, i) => h('i', { class: i < lv - 1 ? `done s${gp.stars[i] ?? 0}` : i === lv - 1 ? 'cur' : '' }))),
+      h(
+        'div',
+        { class: 'target-box' },
+        h('div', { class: 'tb-main' }, h('span', null, '🎯 ', t('targetScore')), h('b', null, num(def.target))),
+        h('div', { class: 'tb-stars' }, h('span', null, `★★ ${num(def.target * STAR2)}`), h('span', null, `★★★ ${num(def.target * STAR3)}`), best ? h('span', { class: 'tb-best' }, `${t('bestScore')}: ${num(best)}`) : null),
+        h('div', { class: 'tb-hint' }, t('scoreHint')),
+      ),
+      h('div', { class: 'intro-list' }, ...items),
+      chips,
+      h('div', { class: 'intro-money' }, svg(ICON.money, 20), money(g.money)),
+      h('div', { class: 'row center' }, h('button', { class: 'btn big primary', 'data-tut': 'start', onclick: () => {
+        Audio.unlock();
+        Audio.click();
+        this.clear();
+        g.startDay();
+      } }, svg(ICON.play, 22), t('start'))),
+    );
+  }
+
+  /** growing city: the level's result */
+  levelReport(): void {
+    const g = this.game;
+    const r = g.report;
+    const s = g.stats;
+    const p = g.scoreParts;
+    const lv = g.day;
+    const passed = !!r.passed;
+    const target = r.target ?? 0;
+    const score = r.score ?? 0;
+    const row = (label: string, v: number, cls = ''): HTMLElement => h('div', { class: `rep-row ${cls}` }, h('span', null, label), h('b', null, `${v > 0 ? '+' : ''}${num(v)}`));
+    const parts = h(
+      'div',
+      { class: 'rep-grid' },
+      row(t('scoreTrips', { n: p.tripCount }), p.trips, 'good'),
+      p.emergency ? row(t('scoreEmergency'), p.emergency, p.emergency > 0 ? 'good' : 'bad') : null,
+      p.crashes ? row(t('scoreCrashes'), p.crashes, 'bad') : null,
+      p.abandoned ? row(t('scoreAbandoned'), p.abandoned, 'bad') : null,
+      p.blocked ? row(t('scoreBlocked'), p.blocked, 'bad') : null,
+    );
+    const pct = Math.max(0, Math.min(1, score / (target * STAR3)));
+    const meter = h(
+      'div',
+      { class: `score-meter ${passed ? 'ok' : 'miss'}` },
+      h('div', { class: 'sm-top' }, h('span', null, t('totalPoints')), h('b', null, num(score)), r.record ? h('em', { class: 'record' }, `🏅 ${t('newRecord')}`) : null),
+      h('div', { class: 'sm-bar' }, h('i', { style: { width: `${pct * 100}%` } }), h('em', { class: 'm0' }), h('em', { class: 'm1' }), h('em', { class: 'm2' })),
+      h('div', { class: 'sm-lbl' }, `${t('target')} ${num(target)}`),
+    );
+    if (!passed) {
+      const card = this.modal(
+        'report',
+        h('div', { class: 'fired-emoji' }, '🚧'),
+        h('h2', null, t('levelFailed')),
+        meter,
+        h('p', null, t('levelFailedDesc', { t: num(target) })),
+        parts,
+        null,
+      );
+      card.append(
+        h(
+          'div',
+          { class: 'col gap' },
+          h('button', { class: 'btn big primary', onclick: () => {
+            Audio.click();
+            this.clear();
+            g.retryDay();
+          } }, '↻ ', t('retryLevel')),
+          h('button', { class: 'btn', onclick: () => this.toMenu() }, t('menu')),
+        ),
+      );
+      return;
+    }
+    const starsEl = h('div', { class: 'big-stars' });
+    for (let i = 0; i < 3; i++) starsEl.append(h('span', { class: `bstar ${i < r.stars ? 'on' : ''}`, style: { animationDelay: `${0.25 + i * 0.25}s` } }, svg(ICON.star, 54)));
+    const grantEl = h('b', null, `+${money(r.grant)}`);
+    const next = lv < GROWTH_LEVELS.length ? growthLevel(lv + 1) : null;
+    const card = this.modal(
+      'report',
+      h('h2', null, t('levelPassed', { n: lv })),
+      starsEl,
+      meter,
+      parts,
+      h(
+        'div',
+        { class: 'rep-money' },
+        h('div', { class: 'rep-row good' }, h('span', null, t('income')), h('b', null, `+${money(s.income)}`)),
+        h('div', { class: 'rep-row good' }, h('span', null, t('grant')), grantEl),
+        h('div', { class: 'rep-row bad' }, h('span', null, t('expenses')), h('b', null, `-${money(r.upkeep)}`)),
+      ),
+      next ? h('div', { class: 'next-district' }, '🏗️ ', t('nextDistrict', { d: next.district[getLang()] })) : null,
+    );
+    const btns = h('div', { class: 'row center gap' });
+    if (Platform.hasAds || import.meta.env.DEV) {
+      const adBtn = h('button', { class: 'btn ad', onclick: async () => {
+        adBtn.setAttribute('disabled', '');
+        const ok = await g.doubleGrant();
+        if (ok) {
+          grantEl.textContent = `+${money(r.grant * 2)}`;
+          this.ui.toast(t('rewardDone'), 'good');
+          adBtn.remove();
+        } else {
+          this.ui.toast(t('adUnavailable'), 'warn');
+          adBtn.removeAttribute('disabled');
+        }
+      } }, '▶ ', t('bonusDouble'));
+      btns.append(adBtn);
+    }
+    // the last planned district: celebrate before traffic keeps growing
+    const finale = lv === GROWTH_LEVELS.length;
+    btns.append(h('button', { class: 'btn big primary', onclick: () => {
+      Audio.click();
+      this.clear();
+      if (finale) g.setPhase('complete');
+      else void g.nextDay();
+    } }, finale ? '🏆 ' : '', t('nextLevel'), ' ➜'));
+    card.append(btns);
+  }
+
+  /** growing city: the last planned district is done */
+  growthComplete(): void {
+    const g = this.game;
+    const gp = g.save.growth;
+    const totalStars = gp.stars.reduce((a, b) => a + (b ?? 0), 0);
+    const totalScore = gp.best.reduce((a, b) => a + (b ?? 0), 0);
+    const card = this.modal(
+      'complete',
+      h('div', { class: 'fired-emoji' }, '🏙️🏆'),
+      h('h2', null, t('growthComplete')),
+      h('p', null, t('growthCompleteDesc')),
+      h('div', { class: 'hub-stats' }, h('div', null, h('span', null, t('rankLbl')), h('b', null, t(rankKey(totalStars)))), h('div', null, h('span', null, t('stars')), h('b', null, `★ ${totalStars} / ${GROWTH_LEVELS.length * 3}`)), h('div', null, h('span', null, t('totalScore')), h('b', null, num(totalScore)))),
+      null,
+    );
+    card.append(
+      h(
+        'div',
+        { class: 'col gap' },
+        h('button', { class: 'btn big primary', onclick: () => {
+          this.clear();
+          void g.nextDay();
+        } }, t('endless')),
+        h('button', { class: 'btn', onclick: () => this.toMenu() }, t('menu')),
       ),
     );
   }
@@ -338,8 +602,8 @@ export class Menus {
     const g = this.game;
     g.persist(true);
     this.clear();
-    const id = g.save.run?.city ?? 'maple';
-    g.loadCity(id, g.save.run, true);
+    if (g.save.lastMode === 'growth' && g.save.growthRun) g.loadCity('growth', g.save.growthRun, true);
+    else g.loadCity(g.save.run?.city ?? 'maple', g.save.run, true);
     g.renderer.rig.autoOrbit = true;
     g.setPhase('menu');
   }
@@ -492,7 +756,7 @@ export class Menus {
     this.modal(
       'policies',
       h('h2', null, t('policies')),
-      lock ? h('div', { class: 'lock-note' }, svg(ICON.lock, 14), t('locked_feature', { n: 5 })) : null,
+      lock ? h('div', { class: 'lock-note' }, svg(ICON.lock, 14), g.growth ? t('locked_level', { n: 5 }) : t('locked_feature', { n: 5 })) : null,
       list,
       h('div', { class: 'row center' }, h('button', { class: 'btn primary', onclick: () => this.closeTop() }, t('close'))),
     );
@@ -512,6 +776,25 @@ function confirmBox(msg: string): boolean {
   document.querySelector('.toasts')?.prepend(el);
   setTimeout(() => el.remove(), 3500);
   return false;
+}
+
+/** career title for the stars collected in the growing city */
+function rankKey(stars: number): StrKey {
+  return (['rank0', 'rank1', 'rank2', 'rank3', 'rank4', 'rank5'] as const)[Math.min(5, Math.floor(stars / 6))];
+}
+
+/** short description of the buildings a district adds, e.g. "12 homes · 5 shops" */
+function buildingMix(list: Building[]): string {
+  const c = { homes: 0, shops: 0, offices: 0, factories: 0, services: 0 };
+  for (const b of list) {
+    if (b.kind === 'house' || b.kind === 'apartment') c.homes++;
+    else if (b.kind === 'shop') c.shops++;
+    else if (b.kind === 'office' || b.kind === 'tower') c.offices++;
+    else if (b.kind === 'industrial') c.factories++;
+    else c.services++;
+  }
+  const parts = (Object.keys(c) as (keyof typeof c)[]).filter((k) => c[k] > 0).map((k) => `${c[k]} ${t(k)}`);
+  return `${t('buildingsMix', { n: list.length })}: ${parts.join(' · ')}`;
 }
 
 function cityGradient(p: CityPreset, i: number): string {

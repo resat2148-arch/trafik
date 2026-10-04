@@ -25,6 +25,12 @@ const Y_ON_WALK = Y_WALK + 0.03;
 /** bridge sidewalks and river coping sit just above the land sidewalks they meet */
 const Y_EDGE = Y_WALK + 0.02;
 
+/** new-district animation: waves of buildings, their delay, stagger and growth time (s) */
+const RISE_WAVES = 3;
+const RISE_DELAY = 0.7;
+const RISE_STAGGER = 0.45;
+const RISE_TIME = 1.6;
+
 export interface Quality {
   shadows: boolean;
   trees: number; // density multiplier
@@ -660,14 +666,66 @@ export class WorldView {
   // ---------------------------------------------------------------------------
   // buildings
 
+  /** growing city: the new district's buildings grow out of the ground, in waves from its centre */
+  startRise(): void {
+    this.rise = { t: 0, groups: [] };
+    this.buildBuildings();
+  }
+
+  private rise: { t: number; groups: THREE.Group[] } | null = null;
+
   buildBuildings(): void {
     for (const m of this.buildingMeshes) {
-      this.group.remove(m);
+      m.parent?.remove(m);
       m.traverse((o) => {
         if ((o as THREE.Mesh).geometry) (o as THREE.Mesh).geometry.dispose();
       });
     }
     this.buildingMeshes = [];
+    const fresh = this.rise ? this.city.growth?.fresh : undefined;
+    if (!this.rise || !fresh?.size) {
+      this.rise = null;
+      this.buildBuildingSet(this.city.buildings, this.group);
+      return;
+    }
+    const f = this.city.growth!.focus;
+    const rising = this.city.buildings.filter((b) => fresh.has(b.id)).sort((a, b) => dist(a, f) - dist(b, f));
+    this.buildBuildingSet(
+      this.city.buildings.filter((b) => !fresh.has(b.id)),
+      this.group,
+    );
+    this.rise.groups = [];
+    for (let k = 0; k < RISE_WAVES; k++) {
+      const g = new THREE.Group();
+      g.scale.y = 0.001;
+      g.visible = false;
+      this.group.add(g);
+      this.buildingMeshes.push(g);
+      this.rise.groups.push(g);
+      this.buildBuildingSet(rising.slice(Math.floor((rising.length * k) / RISE_WAVES), Math.floor((rising.length * (k + 1)) / RISE_WAVES)), g);
+    }
+  }
+
+  private updateRise(dt: number): void {
+    const r = this.rise;
+    if (!r) return;
+    r.t += dt;
+    r.groups.forEach((g, k) => {
+      const u = clamp((r.t - RISE_DELAY - k * RISE_STAGGER) / RISE_TIME, 0, 1);
+      // ease out with a little overshoot, like a time-lapse settling
+      const c = 1.6;
+      const e = u <= 0 ? 0 : 1 + (c + 1) * Math.pow(u - 1, 3) + c * Math.pow(u - 1, 2);
+      g.visible = u > 0;
+      g.scale.y = Math.max(0.001, e);
+    });
+    if (r.t > RISE_DELAY + (RISE_WAVES - 1) * RISE_STAGGER + RISE_TIME + 0.3) {
+      // settled: merge the district back into the city's meshes
+      this.rise = null;
+      this.buildBuildings();
+    }
+  }
+
+  private buildBuildingSet(list: Building[], parent: THREE.Object3D): void {
     const walls: GeoBuilder[] = [];
     for (let i = 0; i < FACADE_COUNT; i++) walls.push(new GeoBuilder());
     const roofs = new GeoBuilder();
@@ -675,8 +733,9 @@ export class WorldView {
     const plain = new GeoBuilder();
     const dirt = new GeoBuilder();
     const scaffold = new GeoBuilder();
-    const rng = new RNG(4242);
-    for (const b of this.city.buildings) {
+    for (const b of list) {
+      // details are random per building but the same wherever and whenever it is drawn
+      const rng = new RNG((Math.round(b.x * 10) * 73856093) ^ (Math.round(b.y * 10) * 19349663));
       if (b.day > this.day + 1) continue;
       if (b.day === this.day + 1) {
         // construction site for tomorrow
@@ -790,8 +849,8 @@ export class WorldView {
       const mesh = new THREE.Mesh(g.build(), m);
       mesh.castShadow = cast && this.quality.shadows;
       mesh.receiveShadow = this.quality.shadows;
-      this.group.add(mesh);
-      this.buildingMeshes.push(mesh);
+      parent.add(mesh);
+      if (parent === this.group) this.buildingMeshes.push(mesh);
     };
     walls.forEach((g, i) => mk(g, this.facadeMats[i]));
     mk(roofs, this.mats.roofFlat);
@@ -1233,6 +1292,7 @@ export class WorldView {
 
   /** update signal lamp colours, night lights */
   update(dt: number, night: number): void {
+    this.updateRise(dt);
     this.blinkT += dt;
     const blinkOn = Math.floor(this.blinkT * 1.6) % 2 === 0;
     const inst = this.signalLamps;

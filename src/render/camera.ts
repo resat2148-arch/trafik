@@ -38,6 +38,7 @@ export class CameraRig {
   onHover: ((x: number, y: number) => void) | null = null;
   enabled = true;
   autoOrbit = false;
+  private glideT = 0;
 
   constructor(dom: HTMLElement, aspect: number, bounds: RigBounds) {
     this.dom = dom;
@@ -64,6 +65,12 @@ export class CameraRig {
       this.target.copy(this.goalTarget);
       this.dist = this.goalDist;
     }
+  }
+
+  /** glide slowly to a view (cinematic moves, e.g. onto a new district) */
+  fly(x: number, y: number, dist: number): void {
+    this.focus(x, y, dist);
+    this.glideT = 3;
   }
 
   rotateBy(a: number): void {
@@ -98,7 +105,9 @@ export class CameraRig {
     const b = this.bounds;
     this.goalTarget.x = clamp(this.goalTarget.x, b.minx, b.maxx);
     this.goalTarget.z = clamp(this.goalTarget.z, b.miny, b.maxy);
-    const k = 1 - Math.exp(-dt * 10);
+    // a fly-to eases in slowly, normal moves follow the input at once
+    this.glideT = Math.max(0, this.glideT - dt);
+    const k = 1 - Math.exp(-dt * (this.glideT > 0 ? 1.7 : 10));
     this.target.lerp(this.goalTarget, k);
     this.dist = lerp(this.dist, this.goalDist, k);
     this.yaw = lerp(this.yaw, this.goalYaw, 1 - Math.exp(-dt * 8));

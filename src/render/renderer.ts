@@ -110,6 +110,18 @@ export class GameRenderer {
     void sim;
   }
 
+  /** growing city: show off the district a level adds (rising buildings, glowing streets, camera on it) */
+  reveal(city: City): void {
+    const g = city.growth;
+    if (!g || !this.world) return;
+    this.world.startRise();
+    this.overlays.flashRoads(g.newRoads);
+    const f = g.focus;
+    const d = Math.min(this.rig.maxDist, Math.max(170, f.r * 2.4));
+    this.rig.focus(f.x, f.y, Math.min(this.rig.maxDist, d * 1.6), true);
+    this.rig.fly(f.x, f.y, d);
+  }
+
   /** switch graphics quality live (antialiasing stays as created) */
   setQuality(level: QualityLevel, sim: Sim | null, day: number): void {
     this.level = level;

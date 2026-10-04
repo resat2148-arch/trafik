@@ -255,6 +255,61 @@ const STR = {
   rewardDone: { en: 'Grant doubled!', tr: 'Ödenek ikiye katlandı!' },
   adUnavailable: { en: 'Ad not available right now.', tr: 'Şu anda reklam yok.' },
   welcomeBack: { en: 'Welcome back, Engineer!', tr: 'Tekrar hoş geldin Mühendis!' },
+  // growing city
+  growthMode: { en: 'Boomtown', tr: 'Büyüyen Şehir' },
+  growthTag: { en: 'NEW', tr: 'YENİ' },
+  growthSub: { en: 'From a small neighbourhood to a metropolis', tr: 'Küçük bir mahalleden metropole' },
+  growthDesc: { en: 'Every level adds a new district to your town and more traffic. Beat the target score to open the next one.', tr: 'Her seviyede şehrine yeni bir bölge ve daha fazla trafik eklenir. Sonrakini açmak için hedef puanı geç.' },
+  level: { en: 'Level', tr: 'Seviye' },
+  levelN: { en: 'Level {n}', tr: 'Seviye {n}' },
+  levelProgress: { en: 'Level {n} · ★ {s}', tr: 'Seviye {n} · ★ {s}' },
+  startCareer: { en: 'Start', tr: 'Başla' },
+  continueLevel: { en: 'Continue: level {n}', tr: 'Devam et: Seviye {n}' },
+  restartCareer: { en: 'Start over', tr: 'Baştan başla' },
+  confirmRestart: { en: 'Sure? Tap again', tr: 'Emin misin? Tekrar dokun' },
+  score: { en: 'Score', tr: 'Skor' },
+  target: { en: 'Target', tr: 'Hedef' },
+  bestScore: { en: 'Best', tr: 'En iyi' },
+  newDistrict: { en: 'New district', tr: 'Yeni bölge' },
+  districtBuilt: { en: '{d} is built!', tr: '{d} kuruldu!' },
+  firstDistrict: { en: 'Your town starts here', tr: 'Şehrin burada başlıyor' },
+  trafficGrows: { en: 'Traffic keeps growing!', tr: 'Trafik artmaya devam ediyor!' },
+  cityGrown: { en: 'The whole city is built: more traffic than ever', tr: 'Şehir tamamen kuruldu: trafik hiç olmadığı kadar yoğun' },
+  buildingsMix: { en: '{n} new buildings', tr: '{n} yeni bina' },
+  homes: { en: 'homes', tr: 'konut' },
+  shops: { en: 'shops', tr: 'dükkan' },
+  offices: { en: 'offices', tr: 'ofis' },
+  factories: { en: 'factories', tr: 'fabrika' },
+  services: { en: 'public services', tr: 'kamu binası' },
+  targetScore: { en: 'Target score', tr: 'Hedef puan' },
+  starGoals: { en: 'More stars', tr: 'Daha çok yıldız' },
+  scoreHint: { en: 'Every smooth trip earns up to 10 points. Accidents, gridlock and drivers who give up cost points.', tr: 'Akıcı her yolculuk 10 puana kadar kazandırır. Kazalar, kilitlenmeler ve vazgeçen sürücüler puan kaybettirir.' },
+  levelPassed: { en: 'Level {n} complete!', tr: 'Seviye {n} tamamlandı!' },
+  levelFailed: { en: 'Target missed', tr: 'Hedefe ulaşılamadı' },
+  levelFailedDesc: { en: 'You need {t} points to open the next district. Improve the junctions and try again: your changes are kept.', tr: 'Yeni bölgeyi açmak için {t} puan gerekiyor. Kavşakları iyileştirip tekrar dene: yaptığın değişiklikler korunur.' },
+  nextDistrict: { en: 'Next: {d}', tr: 'Sıradaki: {d}' },
+  scoreTrips: { en: 'Trips ({n})', tr: 'Yolculuklar ({n})' },
+  scoreEmergency: { en: 'Emergency calls', tr: 'Acil çağrılar' },
+  scoreCrashes: { en: 'Accidents', tr: 'Kazalar' },
+  scoreAbandoned: { en: 'Drivers who gave up', tr: 'Vazgeçen sürücüler' },
+  scoreBlocked: { en: 'Could not leave home', tr: 'Evden çıkamayanlar' },
+  totalPoints: { en: 'Score', tr: 'Toplam puan' },
+  newRecord: { en: 'New record!', tr: 'Yeni rekor!' },
+  nextLevel: { en: 'Next level', tr: 'Sonraki seviye' },
+  retryLevel: { en: 'Try again', tr: 'Tekrar dene' },
+  growthComplete: { en: 'The metropolis is complete!', tr: 'Metropol tamamlandı!' },
+  growthCompleteDesc: { en: 'You grew a small neighbourhood into a whole city. Keep going: traffic grows with every level.', tr: 'Küçük bir mahalleyi koca bir şehre dönüştürdün. Devam et: trafik her seviyede artmaya devam eder.' },
+  totalScore: { en: 'Total score', tr: 'Toplam skor' },
+  locked_level: { en: 'Unlocks at level {n}', tr: '{n}. seviyede açılır' },
+  targetReached: { en: 'Target reached! Keep it up for more stars.', tr: 'Hedefe ulaşıldı! Daha çok yıldız için böyle devam et.' },
+  starReached: { en: '{n} stars reached!', tr: '{n} yıldıza ulaşıldı!' },
+  rank0: { en: 'Intern', tr: 'Stajyer' },
+  rank1: { en: 'Traffic Technician', tr: 'Trafik Teknisyeni' },
+  rank2: { en: 'Traffic Engineer', tr: 'Trafik Mühendisi' },
+  rank3: { en: 'Chief Engineer', tr: 'Baş Mühendis' },
+  rank4: { en: 'Director of Transport', tr: 'Ulaşım Direktörü' },
+  rank5: { en: 'Traffic Legend', tr: 'Trafik Efsanesi' },
+  rankLbl: { en: 'Rank', tr: 'Unvan' },
   speedUnit: { en: 'km/h', tr: 'km/s' },
   sec: { en: 's', tr: 'sn' },
   min: { en: 'min', tr: 'dk' },
@@ -287,6 +342,11 @@ export function t(key: StrKey, vars?: Record<string, string | number>): string {
   let s: string = e ? e[lang] ?? e.en : key;
   if (vars) for (const k of Object.keys(vars)) s = s.split(`{${k}}`).join(String(vars[k]));
   return s;
+}
+
+/** whole number with the language's thousands separator */
+export function num(n: number): string {
+  return Math.round(n).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US');
 }
 
 export function money(n: number): string {

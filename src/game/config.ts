@@ -49,8 +49,11 @@ export const TUTORIAL_UNLOCKS: Record<number, Unlock[]> = {
   5: ['actuated', 'smart', 'greenwave', 'policies', 'preempt'],
 };
 
+/** the first city and the growing city teach the tools one day / level at a time */
+const teaches = (preset: CityPreset): boolean => preset.id === 'maple' || preset.id === 'growth';
+
 export function unlocksFor(preset: CityPreset, day: number): Set<Unlock> {
-  if (preset.id !== 'maple') return new Set(ALL_UNLOCKS);
+  if (!teaches(preset)) return new Set(ALL_UNLOCKS);
   const s = new Set<Unlock>();
   for (let d = 1; d <= day; d++) for (const u of TUTORIAL_UNLOCKS[d] ?? []) s.add(u);
   if (day > 5) for (const u of ALL_UNLOCKS) s.add(u);
@@ -58,7 +61,7 @@ export function unlocksFor(preset: CityPreset, day: number): Set<Unlock> {
 }
 
 export function unlockDay(preset: CityPreset, u: Unlock): number {
-  if (preset.id !== 'maple') return 1;
+  if (!teaches(preset)) return 1;
   for (const [d, list] of Object.entries(TUTORIAL_UNLOCKS)) if (list.includes(u)) return Number(d);
   return 1;
 }
@@ -140,6 +143,30 @@ export function dayConfig(preset: CityPreset, day: number): DayConfig {
   };
 }
 
+/** a level of the growing city: its weather, events and incidents (its demand comes with the city) */
+export function growthDayConfig(level: number): DayConfig {
+  const rng = new RNG(9173 + level * 977);
+  let rain: [number, number] | null = null;
+  let event: DayConfig['event'] = null;
+  if (level >= 3 && level % 3 === 0) {
+    const s = rng.pick([7, 8, 16.5, 17.5]);
+    rain = [s, s + rng.range(2, 3.5)];
+  }
+  if (level >= 4 && level % 3 === 1) {
+    const hour = rng.pick([16.5, 17, 18]);
+    event = { hour, until: hour + 2.2, rate: 0.5 + level * 0.03 };
+  }
+  return {
+    day: level,
+    demand: 1,
+    rain,
+    event,
+    accidentRate: level === 1 ? 0 : 0.5 + level * 0.1,
+    emergencies: level >= 2,
+    aggression: Math.min(0.12, (level - 1) * 0.012),
+  };
+}
+
 /** satisfaction score (0..100) for a completed trip */
 export function tripScore(time: number, ff: number): number {
   // ff is a realistic uncongested travel time; ~1.2x is normal city driving
@@ -153,4 +180,30 @@ export function tripScore(time: number, ff: number): number {
 
 export function starsFor(avg: number): number {
   return avg >= 80 ? 3 : avg >= 62 ? 2 : avg >= 42 ? 1 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// growing city: score
+
+/** score events besides completed trips */
+export const SCORE = {
+  crash: -25,
+  abandon: -8,
+  blocked: -2,
+  emergencyFast: 60,
+  emergencySlow: -25,
+};
+
+/** points for a completed trip: 10 for a smooth one, nothing for one stuck in jams */
+export function tripPoints(time: number, ff: number): number {
+  return Math.round(tripScore(time, ff) / 10);
+}
+
+/** the second and third star need this much more than the target */
+export const STAR2 = 1.1;
+export const STAR3 = 1.2;
+
+/** stars for a level: one for reaching the target, more for beating it clearly */
+export function scoreStars(score: number, target: number): number {
+  return score >= target * STAR3 ? 3 : score >= target * STAR2 ? 2 : score >= target ? 1 : 0;
 }

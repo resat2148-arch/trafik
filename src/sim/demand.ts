@@ -189,11 +189,26 @@ export class Demand {
       case 'hbw': {
         const o = this.homes.sample(rng);
         if (!o) return;
+        if (this.external > 0 && this.exits.length && rng.chance(this.external)) {
+          // works outside the built-up area
+          this.originTrip(o, null, this.nearestGateway(this.exits, o, false), this.commuteKind());
+          return;
+        }
         const d = this.pickDest(this.jobs, o);
         if (d) this.buildingTrip(o, d, this.commuteKind());
         return;
       }
       case 'whb': {
+        if (this.external > 0 && this.entries.length && rng.chance(this.external)) {
+          // coming home from work outside the built-up area
+          const d = this.homes.sample(rng);
+          const dest = d ? this.destFor(d) : null;
+          if (!d || !dest) return;
+          const kind = this.commuteKind();
+          this.sim.queueGateway({ kind, model: this.sim.spawnModelFor(kind), link: this.nearestGateway(this.entries, d, true), dest, goal: dest.link });
+          this.stats.generated++;
+          return;
+        }
         const o = this.jobs.sample(rng);
         if (!o) return;
         const d = this.pickDest(this.homes, o);
@@ -223,10 +238,10 @@ export class Demand {
       }
       case 'thru': {
         if (this.entries.length < 2) return;
-        const a = rng.pick(this.entries);
+        const a = this.pickGateway(this.entries);
         let b: Link | null = null;
         for (let k = 0; k < 5; k++) {
-          const c = rng.pick(this.exits);
+          const c = this.pickGateway(this.exits);
           if (c.road === a.road) continue;
           if (dist(c.to, a.from) < this.lambda * 0.8) continue;
           b = c;
@@ -276,13 +291,37 @@ export class Demand {
     let bw = -1;
     for (const l of list) {
       const g: Node = entering ? l.from : l.to;
-      const w = Math.exp(-dist(g, b) / (this.lambda * 1.2)) * (0.5 + this.rng.next());
+      const w = Math.exp(-dist(g, b) / (this.lambda * 1.2)) * (0.5 + this.rng.next()) * this.gatewayWeight(l);
       if (w > bw) {
         bw = w;
         best = l;
       }
     }
     return best;
+  }
+
+  /** growing city: share of residents' commutes that leave the built-up area */
+  get external(): number {
+    return this.city.growth?.external ?? 0;
+  }
+
+  /** growing city: through traffic and commuters favour the main roads out of town */
+  private gatewayWeight(l: Link): number {
+    if (!this.city.growth) return 1;
+    const c = l.road.cls;
+    return c === 'local' ? 0.3 : c === 'avenue' ? 1 : 1.5;
+  }
+
+  private pickGateway(list: Link[]): Link {
+    if (!this.city.growth) return this.rng.pick(list);
+    let tot = 0;
+    for (const l of list) tot += this.gatewayWeight(l);
+    let r = this.rng.next() * tot;
+    for (const l of list) {
+      r -= this.gatewayWeight(l);
+      if (r <= 0) return l;
+    }
+    return list[list.length - 1];
   }
 
   private commuteKind(): VKind {

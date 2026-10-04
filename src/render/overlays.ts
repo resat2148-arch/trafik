@@ -172,6 +172,42 @@ export class Overlays {
     this.group.add(this.waveSel);
   }
 
+  private flash: { mesh: THREE.Mesh; t: number } | null = null;
+
+  /** growing city: the streets a level builds glow for a few seconds */
+  flashRoads(roads: Iterable<Road>): void {
+    if (this.flash) {
+      this.group.remove(this.flash.mesh);
+      this.flash.mesh.geometry.dispose();
+      this.flash = null;
+    }
+    const gb = new GeoBuilder();
+    gb.setRGB(1, 0.8, 0.28);
+    for (const r of roads) {
+      const pts = r.center.sub(r.armA.trim, r.length - r.armB.trim).points();
+      gb.ribbon(pts, 0.8, 0.23, -r.width / 2);
+      gb.ribbon(pts, 0.8, 0.23, r.width / 2);
+    }
+    if (gb.empty) return;
+    const mesh = new THREE.Mesh(gb.build(), new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, transparent: true, opacity: 0, depthWrite: false }));
+    mesh.renderOrder = 4;
+    this.group.add(mesh);
+    this.flash = { mesh, t: 0 };
+  }
+
+  private updateFlash(dt: number): void {
+    const f = this.flash;
+    if (!f) return;
+    f.t += dt;
+    const fade = Math.min(1, f.t / 0.8) * clamp(1 - (f.t - 6.5) / 1.5, 0, 1);
+    (f.mesh.material as THREE.MeshBasicMaterial).opacity = fade * (0.6 + 0.3 * Math.sin(f.t * 5));
+    if (f.t > 8) {
+      this.group.remove(f.mesh);
+      f.mesh.geometry.dispose();
+      this.flash = null;
+    }
+  }
+
   setSelection(s: Selection): void {
     this.selection = s;
     if (this.roadSel) {
@@ -274,6 +310,7 @@ export class Overlays {
 
   update(dt: number, sim: Sim, night: number): void {
     this.t += dt;
+    this.updateFlash(dt);
     const s = this.selection;
     if (s) {
       let x = 0;

@@ -1,7 +1,9 @@
 // HUD, toasts, world markers and the glue between game and DOM.
 
 import type { Game, GameUI, Phase, ToastKind } from '../game/game.ts';
-import { t, money } from '../game/i18n.ts';
+import { t, money, num } from '../game/i18n.ts';
+import { growthLevel } from '../world/growth.ts';
+import { STAR2, STAR3 } from '../game/config.ts';
 import { DAY_KEYS, DAY_LENGTH, fmtHour, isRush } from '../game/clock.ts';
 import { intensityAt } from '../sim/demand.ts';
 import { Audio } from '../audio/audio.ts';
@@ -58,7 +60,7 @@ export class UI implements GameUI {
 
   private buildHud(): void {
     const g = this.game;
-    const dayChip = h('div', { class: 'chip day-chip' }, h('span', { class: 'day-lbl' }, t('day')), (this.els.day = h('b', null, '1')));
+    const dayChip = h('div', { class: 'chip day-chip' }, (this.els.dayLbl = h('span', { class: 'day-lbl' }, t('day'))), (this.els.day = h('b', null, '1')));
     const clockIcon = h('span', { class: 'clock-ico' });
     this.els.clockIcon = clockIcon;
     const clock = h('div', { class: 'chip clock-chip' }, clockIcon, (this.els.clock = h('b', null, '06:00')), (this.els.rush = h('span', { class: 'rush-tag' }, t('rush'))));
@@ -93,7 +95,19 @@ export class UI implements GameUI {
       'div',
       { class: 'sat', title: t('satisfaction') },
       (this.els.satEmoji = h('span', { class: 'sat-emoji' }, '🙂')),
-      h('div', { class: 'sat-col' }, h('div', { class: 'sat-lbl' }, t('satisfaction'), (this.els.satPct = h('b', null, '70%'))), h('div', { class: 'sat-bar' }, satFill)),
+      h(
+        'div',
+        { class: 'sat-col' },
+        h('div', { class: 'sat-lbl' }, t('satisfaction'), (this.els.satPct = h('b', null, '70%'))),
+        h('div', { class: 'sat-bar' }, satFill),
+        // growing city: the day's score against the level's target (the marks are the 2nd and 3rd star)
+        (this.els.scoreRow = h(
+          'div',
+          { class: 'score-row' },
+          h('div', { class: 'sat-lbl' }, t('score'), (this.els.scoreVal = h('b', null, '0'))),
+          h('div', { class: 'score-bar' }, (this.els.scoreFill = h('i')), h('em', { class: 'm1' }), h('em', { class: 'm2' })),
+        )),
+      ),
     );
     const center = h('div', { class: 'tb-center' }, sat);
     const right = h(
@@ -159,6 +173,16 @@ export class UI implements GameUI {
     if (g.phase === 'playing' || g.phase === 'intro') {
       const hour = g.hour;
       this.set('day', String(g.day));
+      this.set('dayLbl', g.growth ? t('level') : t('day'));
+      this.root.classList.toggle('growth-mode', g.growth);
+      this.els.scoreRow.style.display = g.growth ? '' : 'none';
+      if (g.growth) {
+        const target = growthLevel(g.day).target;
+        this.set('scoreVal', `${num(g.score)} / ${num(target)}`);
+        const f = Math.max(0, Math.min(1, g.score / (target * STAR3)));
+        this.els.scoreFill.style.width = `${Math.max(1.5, f * 100)}%`;
+        this.els.scoreFill.style.background = g.score >= target * STAR2 ? 'linear-gradient(90deg,#ffd166,#ffb020)' : g.score >= target ? '#3ee07a' : '#ff9f43';
+      }
       this.set('clock', fmtHour(hour));
       const night = hour < 6.5 || hour > 19.6;
       const ico = night ? 'moon' : g.sim.rain > 0.1 ? 'rain' : 'sun';

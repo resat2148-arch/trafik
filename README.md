@@ -22,6 +22,19 @@ mutlu tutmalısın — memnuniyet sıfıra düşerse kovulursun.
 - **Şehirler:** Akçaağaç Vadisi (eğitim, araçlar gün gün açılır) → Nehirkent (köprüler) →
   Merkez Tepeler (tek yönler, bulvar) → Metropol Körfezi. Her şehir bittiğinde sıradaki açılır,
   ardından sonsuz mod.
+- **Büyüyen Şehir modu:** Küçük bir mahallede (4 blok) başlarsın; geçtiğin her seviyede şehre
+  yeni bir bölge eklenir (çarşı, okul bayırı, şehir merkezi, iş merkezi, nehir kıyısı, sanayi,
+  nehrin karşı yakası) ve trafik artar. Yeni bölgede binalar yükselerek kurulur, yeni sokaklar
+  parlar. Tüm şehir baştan planlıdır: henüz kurulmamış bölgelere giden sokaklar harita dışına
+  uzanır, bu yüzden bir kavşak bölgesi büyümeden önce de sonra da aynı kalır; yaptığın her ayar
+  (ışıklar, şeritler, genişletmeler, yeşil dalgalar) sonraki seviyeye taşınır. Seviyeyi geçmek
+  için günü hedef puanın üzerinde bitirmelisin: akıcı her yolculuk 10 puana kadar kazandırır,
+  kazalar, vazgeçen ve evden çıkamayan sürücüler puan kaybettirir, hızlı ulaşan ambulans puan
+  kazandırır. Hedefin %110'u ★★, %120'si ★★★ getirir; en iyi skorlar, yıldızlar ve unvan
+  (Stajyer → Trafik Efsanesi) kaydedilir. Hedefe ulaşılamazsa seviye, yaptığın değişiklikler
+  korunarak tekrar oynanır. 10. seviyeden sonra harita aynı kalır, trafik artmaya devam eder.
+  Hedefler simülasyonla kalibre edildi: ilk seviyeler dokunulmamış ağla geçilebilir, 4.
+  seviyeden itibaren ancak iyileştirilmiş bir ağ hedefe ulaşır.
 - **Olaylar:** Yağmur (daha yavaş sürüş, daha uzun takip mesafesi), büyük etkinliklerin
   yarattığı ani talep, rastgele kazalar (çekici gönder ya da polis çağır), siren çalan
   ambulanslar (sürücüler kenara çekilir, istenirse sinyal önceliği), "danışman" ipuçları.
@@ -86,6 +99,7 @@ Ek simülasyon testleri (`node --experimental-strip-types` ile):
 
 ```bash
 node --experimental-strip-types tests/headless.ts riverside 3   # şehir, gün
+node --experimental-strip-types tests/headless.ts growth 4      # Büyüyen Şehir, seviye
 node --experimental-strip-types tests/balance.ts maple 1 5 good  # strateji: none|tutorial|good|smart
 ```
 
@@ -97,7 +111,7 @@ node --experimental-strip-types tests/balance.ts maple 1 5 good  # strateji: non
 ```
 src/core/      matematik, RNG, yol (Path) ve geometri yardımcıları
 src/sim/       ağ modeli, kavşak kurucu, sinyaller, araç, rota, talep, simülasyon çekirdeği
-src/world/     prosedürel şehir üretici (4 şehir şablonu)
+src/world/     prosedürel şehir üretici (4 şehir şablonu) ve Büyüyen Şehir planı (growth.ts)
 src/game/      oyun döngüsü, ekonomi, günler, kayıt, yerelleştirme (EN/TR)
 src/render/    three.js sahne: dünya, araçlar, yayalar, ışık/gece-gündüz/yağmur, kamera, katmanlar
 src/ui/        HUD, paneller, menüler, eğitim

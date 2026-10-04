@@ -1,8 +1,9 @@
 // Headless simulation test: runs a city for a simulated day without
 // rendering and reports throughput, delays, overlaps (collisions) and
-// deadlocks.  Usage: node --experimental-strip-types tests/headless.ts [preset] [day] [seconds]
+// deadlocks.  Usage: node --experimental-strip-types tests/headless.ts [preset|growth] [day|level] [seconds]
 
 import { PRESETS, generateCity } from '../src/world/citygen.ts';
+import { GROWTH_PRESET, generateGrowthCity } from '../src/world/growth.ts';
 import { Sim } from '../src/sim/sim.ts';
 import { Demand } from '../src/sim/demand.ts';
 import { DAY_LENGTH, hourAt, fmtHour } from '../src/game/clock.ts';
@@ -11,10 +12,11 @@ import type { Conn, Lane } from '../src/sim/network.ts';
 const presetId = process.argv[2] ?? 'maple';
 const day = Number(process.argv[3] ?? 1);
 const secs = Number(process.argv[4] ?? DAY_LENGTH);
-const preset = PRESETS.find((p) => p.id === presetId)!;
+// 'growth' runs a level of the growing city (the day argument is the level)
+const preset = presetId === 'growth' ? GROWTH_PRESET : PRESETS.find((p) => p.id === presetId)!;
 
 const t0 = performance.now();
-const city = generateCity(preset);
+const city = presetId === 'growth' ? generateGrowthCity(day) : generateCity(preset);
 const t1 = performance.now();
 const seedArg = process.argv.find((a) => a.startsWith('--seed='));
 const seed = seedArg ? Number(seedArg.slice(7)) : 0;
