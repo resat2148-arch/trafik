@@ -111,6 +111,8 @@ export class Sim {
   rain = 0;
   /** global multiplier for demand (game difficulty) */
   aggressionBias = 0;
+  /** how long drivers put up with waiting before they get angry or give up (1 = normal) */
+  patience = 1;
   private statT = 0;
   private dt = 1 / 30;
   private mergeLanes: Lane[] = [];
@@ -548,7 +550,7 @@ export class Sim {
       v.approachWait += dt;
       v.waitTotal += dt;
     }
-    v.mood = clamp((v.stuckT - 15) / 60, 0, 1);
+    v.mood = clamp((v.stuckT - 15 * this.patience) / (60 * this.patience), 0, 1);
     if (v.stuckT > 8 && v.hornT <= 0 && L && L.gap < 12 && !v.holdLine) {
       if (this.rng.chance(0.04 + v.aggr * 0.05)) {
         this.events.push({ type: 'horn', x: v.x, y: v.y, v });
@@ -558,7 +560,7 @@ export class Sim {
     }
     if (v.hornT > 0) v.hornT -= dt;
     if (v.hornFlash > 0) v.hornFlash -= dt;
-    if (v.stuckT > 160 && !v.emergency && !v.bus) this.removeVehicle(v, 'abandon');
+    if (v.stuckT > 160 * this.patience && !v.emergency && !v.bus) this.removeVehicle(v, 'abandon');
     // periodic rerouting with navigation apps / when stuck
     v.rerouteT -= dt;
     if (v.rerouteT <= 0 && seg.isLane && !v.committed) {

@@ -21,6 +21,10 @@ import { DAY_LENGTH, hourAt, timeAtHour } from './clock.ts';
 import { COST, POLICIES, SCORE, STAR2, STAR3, UPKEEP, dayConfig, growthDayConfig, scoreStars, starsFor, tripPoints, tripScore, unlocksFor } from './config.ts';
 import type { DayConfig, Unlock } from './config.ts';
 import { loadSave, snapshotNetwork, storeSave, translateNetwork } from './save.ts';
+import { ACHIEVEMENTS, ACH_NEED, achById } from './achievements.ts';
+import type { LifeStats } from './achievements.ts';
+import { PERK, perkCount, perkOffer } from './perks.ts';
+import type { PerkId, Perks } from './perks.ts';
 import type { RunSave, SaveData } from './save.ts';
 import { t } from './i18n.ts';
 import type { StrKey } from './i18n.ts';
@@ -34,6 +38,8 @@ export type WidenBlock = 'bridge' | 'max' | 'short' | 'buildings';
 
 export interface GameUI {
   toast(msg: string, kind: ToastKind, action?: { label: string; fn: () => void }, key?: string): void;
+  /** an achievement was just earned */
+  achievement(id: string): void;
   refreshPanel(): void;
   phaseChanged(p: Phase): void;
   floatText(x: number, y: number, text: string, color: string): void;
@@ -191,6 +197,12 @@ export class Game {
   private levelDone = false;
   /** growing city: the new district is being shown (buildings rising, camera on it) */
   revealing = false;
+  /** growing city: advantages of this career, the offer waiting to be picked and the offers' seed */
+  perks: Perks = {};
+  private perkOfferNow: PerkId[] | null = null;
+  private perkSeed = 1;
+  /** achievements earned during the current day */
+  dayAch: string[] = [];
 
   constructor() {
     this.save = loadSave();
@@ -253,6 +265,9 @@ export class Game {
       this.preempt = run.preempt;
       this.totalTrips = run.totalTrips;
       this.starsHistory = run.stars.slice();
+      this.perks = { ...(run.perks ?? {}) };
+      this.perkOfferNow = run.perkOffer?.slice() ?? null;
+      this.perkSeed = run.perkSeed ?? 1;
       this.applyNetwork(run);
       for (const w of run.waves ?? []) this.sim.waves.add(w.name, w.dir);
     } else {
@@ -265,7 +280,15 @@ export class Game {
       this.preempt = false;
       this.totalTrips = 0;
       this.starsHistory = [];
+      this.perks = {};
+      this.perkOfferNow = null;
+      this.perkSeed = (Date.now() & 0xfffff) | 1;
     }
+    if (!this.growth) {
+      this.perks = {};
+      this.perkOfferNow = null;
+    }
+    this.sim.patience = 1 + PERK.patience * this.perkRank('patience');
     if (this.growth) this.clearWidenedLots();
     this.renderer.setCity(this.city, this.sim, this.day);
     this.renderer.overlays.setSelection(null);
@@ -340,6 +363,7 @@ export class Game {
     if (this.growth && !this.menuMode) this.sat = 70;
     this.score = 0;
     this.scoreParts = emptyParts();
+    this.dayAch = [];
     this.demand.setDay(this.day);
     this.demand.scale = this.cfg.demand * (this.policies.has('transit') ? 0.9 : 1);
     this.sim.aggressionBias = this.cfg.aggression - (this.policies.has('safety') ? 0.08 : 0);
@@ -399,13 +423,127 @@ export class Game {
   /** daily running costs of signals, roundabouts and policies */
   private upkeep(): number {
     let upkeep = 0;
+    const smartFree = this.perkRank('smart') > 0;
     for (const n of this.city.net.nodes) {
       if (n.control === 'signal' && n.signal) {
-        upkeep += UPKEEP.signal + (n.signal.mode === 'actuated' ? UPKEEP.actuated : n.signal.mode === 'smart' ? UPKEEP.smart : 0);
+        upkeep += UPKEEP.signal + (smartFree ? 0 : n.signal.mode === 'actuated' ? UPKEEP.actuated : n.signal.mode === 'smart' ? UPKEEP.smart : 0);
       } else if (n.control === 'roundabout') upkeep += UPKEEP.roundabout;
     }
     for (const p of POLICIES) if (this.policies.has(p.id)) upkeep += p.cost;
-    return upkeep;
+    return Math.round(upkeep * (1 - PERK.upkeep * this.perkRank('upkeep')));
+  }
+
+  // ---------------------------------------------------------------- advantages
+
+  /** rank of a growing-city advantage (none in the campaign) */
+  perkRank(id: PerkId): number {
+    return this.growth ? this.perks[id] ?? 0 : 0;
+  }
+
+  /** price of an action after the career's advantages */
+  costOf(key: keyof typeof COST): number {
+    let c: number = COST[key];
+    switch (key) {
+      case 'signal':
+      case 'allstop':
+      case 'priority':
+      case 'roundaboutLocal':
+      case 'roundaboutMajor':
+        c *= 1 - PERK.bulk * this.perkRank('bulk');
+        break;
+      case 'restripe':
+      case 'widen':
+        c *= 1 - PERK.roadCrew * this.perkRank('roadCrew');
+        break;
+      case 'actuated':
+      case 'smart':
+        if (this.perkRank('smart')) c *= 0.5;
+        break;
+      case 'tow':
+        if (this.perkRank('tow')) c *= 0.5;
+        break;
+      case 'police':
+        if (this.perkRank('police')) c = 0;
+        break;
+      case 'preempt':
+        if (this.perkRank('ambulance')) c = 0;
+        break;
+    }
+    return Math.round(c);
+  }
+
+  /** advantages waiting to be picked after the level just passed */
+  get perkChoices(): PerkId[] | null {
+    const offer = this.levelDone ? this.save.growthRun?.perkOffer : this.perkOfferNow;
+    return offer?.length ? offer : null;
+  }
+
+  /** take one of the offered advantages; it lasts for the rest of the career */
+  pickPerk(id: PerkId): void {
+    const offer = this.perkChoices;
+    if (!offer || !offer.includes(id)) return;
+    const run = this.levelDone ? this.save.growthRun : null;
+    const perks = run ? (run.perks = { ...(run.perks ?? {}) }) : this.perks;
+    perks[id] = (perks[id] ?? 0) + 1;
+    if (run) {
+      run.perkOffer = undefined;
+      storeSave(this.save, true);
+    } else {
+      this.perkOfferNow = null;
+      this.sim.patience = 1 + PERK.patience * this.perkRank('patience');
+      this.persist(true);
+    }
+    Audio.success();
+    if (perkCount(perks) >= ACH_NEED.perkCollector) this.unlock('perkCollector');
+  }
+
+  // ---------------------------------------------------------------- achievements
+
+  /** earn an achievement (once) and pay its reward */
+  unlock(id: string): void {
+    const a = achById(id);
+    if (!a || this.menuMode || this.save.ach[id]) return;
+    this.save.ach[id] = Date.now();
+    this.dayAch.push(id);
+    this.grantMoney(a.reward);
+    storeSave(this.save, true);
+    this.ui?.achievement(id);
+  }
+
+  /** count towards the lifetime achievements */
+  private bump(stat: keyof LifeStats, n = 1): void {
+    if (this.menuMode || n <= 0) return;
+    const life = this.save.life;
+    life[stat] += n;
+    for (const a of ACHIEVEMENTS) if (a.goal?.stat === stat && life[stat] >= a.goal.n) this.unlock(a.id);
+    storeSave(this.save);
+  }
+
+  /** money that also reaches the next level when that is already saved */
+  private grantMoney(n: number): void {
+    this.money += n;
+    if (this.levelDone && this.save.growthRun) this.save.growthRun.money += n;
+    else this.persist();
+  }
+
+  /** stars over every campaign city and growing-city level */
+  totalStars(): number {
+    let n = 0;
+    for (const p of Object.values(this.save.progress)) for (const s of p.stars) n += s ?? 0;
+    for (const s of this.save.growth.stars) n += s ?? 0;
+    return n;
+  }
+
+  /** achievements decided when a day or a level ends */
+  private dayEndAchievements(stars: number, avg: number, passed: boolean): void {
+    const s = this.stats;
+    if (passed) this.unlock('firstDay');
+    if (stars >= 3) this.unlock('threeStars');
+    if (avg >= ACH_NEED.happyCity) this.unlock('happyCity');
+    if (s.crashes === 0 && this.day >= 3 && passed) this.unlock('noCrash');
+    if (s.abandoned === 0 && s.trips >= ACH_NEED.noAbandon) this.unlock('noAbandon');
+    if (s.minSat < ACH_NEED.comeback && stars >= 1) this.unlock('comeback');
+    if (this.totalStars() >= ACH_NEED.starCollector) this.unlock('starCollector');
   }
 
   private endDay(): void {
@@ -436,6 +574,8 @@ export class Game {
       }
     }
     this.save.progress[this.preset.id] = prog;
+    this.dayEndAchievements(stars, avg, true);
+    if (PRESETS.every((p) => this.save.progress[p.id]?.completed)) this.unlock('allCities');
     this.day++;
     this.persist(true);
     Audio.success();
@@ -447,6 +587,7 @@ export class Game {
 
   /** growing city: the level's day is over; reaching the score target opens the next district */
   private endLevel(): void {
+    this.score = Math.round(this.score);
     const lv = this.day;
     const def = growthLevel(lv);
     const s = this.stats;
@@ -461,12 +602,19 @@ export class Game {
     let grant = 0;
     if (passed) {
       upkeep = this.upkeep();
-      grant = Math.round((2500 + this.score * 0.8 + lv * 500) / 10) * 10;
+      grant = Math.round(((2500 + this.score * 0.8 + lv * 500) * (1 + PERK.grant * this.perkRank('grant'))) / 10) * 10;
       this.money += grant - upkeep;
       prog.level = Math.max(prog.level, lv + 1);
       this.starsHistory[lv - 1] = Math.max(this.starsHistory[lv - 1] ?? 0, stars);
     }
-    this.report = { avg, stars, upkeep, grant, doubled: false, score: this.score, target: def.target, passed, record: prevBest > 0 && this.score > prevBest, prevBest };
+    const record = prevBest > 0 && this.score > prevBest;
+    this.report = { avg, stars, upkeep, grant, doubled: false, score: this.score, target: def.target, passed, record, prevBest };
+    this.dayEndAchievements(stars, avg, passed);
+    if (record) this.unlock('record');
+    if (this.score >= def.target * ACH_NEED.overachiever) this.unlock('overachiever');
+    if (passed && lv >= 3) this.unlock('level3');
+    if (passed && lv >= 6) this.unlock('level6');
+    if (passed && lv >= 10) this.unlock('level10');
     if (passed) {
       // the next level's city with everything the player built so far
       this.save.growthRun = this.nextLevelRun();
@@ -496,6 +644,10 @@ export class Game {
       totalTrips: this.totalTrips,
       stars: this.starsHistory.slice(),
       waves: this.sim.waves.corridors.map((c) => ({ name: c.name, dir: c.dir })),
+      perks: { ...this.perks },
+      // three advantages to pick from before the next level starts
+      perkOffer: perkOffer(this.day, this.perks, this.perkSeed),
+      perkSeed: this.perkSeed,
     };
   }
 
@@ -562,8 +714,12 @@ export class Game {
       stars: this.starsHistory,
       waves: this.sim.waves.corridors.map((c) => ({ name: c.name, dir: c.dir })),
     };
-    if (this.growth) this.save.growthRun = run;
-    else this.save.run = run;
+    if (this.growth) {
+      run.perks = { ...this.perks };
+      run.perkSeed = this.perkSeed;
+      if (this.perkOfferNow) run.perkOffer = this.perkOfferNow.slice();
+      this.save.growthRun = run;
+    } else this.save.run = run;
     this.save.lastMode = this.growth ? 'growth' : 'campaign';
     storeSave(this.save, immediate);
   }
@@ -621,6 +777,7 @@ export class Game {
     const peak = (hour > 7 && hour < 9.5) || (hour > 16.3 && hour < 19);
     let demandScale = 1;
     if (this.policies.has('flex') && peak) demandScale = 0.85;
+    if (peak && this.perkRank('flex')) demandScale *= PERK.flex;
     this.demand.update(dt * demandScale, hour);
     this.sim.rain = this.rainNow();
     this.sim.step(dt);
@@ -647,10 +804,11 @@ export class Game {
     switch (e.type) {
       case 'trip': {
         const score = tripScore(e.time, e.ff);
-        this.addScore('trips', tripPoints(e.time, e.ff));
+        this.addScore('trips', tripPoints(e.time, e.ff) * (1 + PERK.score * this.perkRank('score')));
         this.scoreParts.tripCount++;
+        this.bump('trips');
         this.sat += (score - this.sat) * 0.018;
-        const toll = Math.round(3 + (score / 100) * 4);
+        const toll = Math.round((3 + (score / 100) * 4) * (1 + PERK.toll * this.perkRank('toll')));
         this.money += toll;
         // occasional floating income near the camera
         const now = performance.now();
@@ -678,7 +836,7 @@ export class Game {
         this.stats.crashes++;
         this.addScore('crashes', SCORE.crash, e.x, e.y);
         const where = e.node ? e.node.name : this.roadNameAt(e.vehicles[0]);
-        const inc: Incident = { id: INC_ID++, vehicles: e.vehicles, x: e.x, y: e.y, age: 0, clearAfter: 150, tow: null, towWork: 0, where };
+        const inc: Incident = { id: INC_ID++, vehicles: e.vehicles, x: e.x, y: e.y, age: 0, clearAfter: this.perkRank('tow') ? 100 : 150, tow: null, towWork: 0, where };
         this.incidents.push(inc);
         Audio.crash();
         this.ui?.toast(e.node ? t('redRunCrash', { r: where }) : t('accidentAt', { r: where }), 'bad', {
@@ -701,11 +859,13 @@ export class Game {
         this.stats.emergencies++;
         if (e.time < ff * 1.9 + 10) {
           this.stats.emergenciesFast++;
-          const bonus = 400;
+          const boost = this.perkRank('ambulance') ? 1.5 : 1;
+          const bonus = Math.round(400 * boost);
           this.money += bonus;
           this.stats.income += bonus;
           this.sat = Math.min(100, this.sat + 1.5);
-          this.addScore('emergency', SCORE.emergencyFast, e.v.x, e.v.y);
+          this.addScore('emergency', Math.round(SCORE.emergencyFast * boost), e.v.x, e.v.y);
+          this.bump('ambulances');
           this.ui?.toast(t('ambulanceFast', { m: `$${bonus}` }), 'good');
           Audio.cash();
         } else {
@@ -721,6 +881,7 @@ export class Game {
         this.money += e.passengers;
         this.stats.passengers += e.passengers;
         this.stats.income += e.passengers;
+        this.bump('bus', e.passengers);
         break;
       case 'redrun':
         break;
@@ -761,7 +922,7 @@ export class Game {
   private updateIncidents(dt: number): void {
     // random accidents
     const n = this.sim.vehicles.length;
-    const rate = this.cfg.accidentRate * (n / 150) * (1 + this.sim.rain * 1.5) * (this.policies.has('safety') ? 0.55 : 1) * 0.0022;
+    const rate = this.cfg.accidentRate * (n / 150) * (1 + this.sim.rain * 1.5) * (this.policies.has('safety') ? 0.55 : 1) * (1 - PERK.safety * this.perkRank('safety')) * 0.0022;
     this.accidentAcc += rate * dt;
     if (this.accidentAcc > 1) {
       this.accidentAcc = 0;
@@ -777,7 +938,7 @@ export class Game {
           // reached its destination (parked next to the wreck)
           inc.towWork = 99;
         } else if (Math.hypot(tw.x - inc.x, tw.y - inc.y) < 22 && tw.v < 1.5) inc.towWork += dt;
-        if (inc.towWork > 5) {
+        if (inc.towWork > (this.perkRank('tow') ? 3 : 5)) {
           this.resolveIncident(inc);
           if (tw.state !== 'gone') this.sim.removeVehicle(tw, 'cleared');
           continue;
@@ -1082,13 +1243,13 @@ export class Game {
     if (c === n.control) return 0;
     switch (c) {
       case 'signal':
-        return COST.signal;
+        return this.costOf('signal');
       case 'roundabout':
-        return n.arms.some((a) => a.road.cls !== 'local') ? COST.roundaboutMajor : COST.roundaboutLocal;
+        return this.costOf(n.arms.some((a) => a.road.cls !== 'local') ? 'roundaboutMajor' : 'roundaboutLocal');
       case 'allstop':
-        return COST.allstop;
+        return this.costOf('allstop');
       default:
-        return COST.priority;
+        return this.costOf('priority');
     }
   }
 
@@ -1117,6 +1278,7 @@ export class Game {
     this.renderer.overlays.setSelection(this.selection);
     this.sim.waves.update(0, this.sim.signalNodes);
     this.refreshWaveOverlay();
+    if (c === 'roundabout') this.bump('roundabouts');
     this.afterChange();
     this.ui?.tutorialEvent('control:' + c);
     return true;
@@ -1124,7 +1286,7 @@ export class Game {
 
   setStopMinor(n: Node, stop: boolean): void {
     if (n.stopMinor === stop) return;
-    if (!this.pay(COST.priority, n.x, n.y)) return;
+    if (!this.pay(this.costOf('priority'), n.x, n.y)) return;
     n.stopMinor = stop;
     this.sim.rebuildNode(n);
     this.renderer.world.refresh();
@@ -1135,7 +1297,7 @@ export class Game {
   setMajor(n: Node, a: Arm, b: Arm): void {
     const next = [a.road.id, b.road.id];
     if (n.majorRoads.size === 2 && next.every((id) => n.majorRoads.has(id))) return;
-    if (!this.pay(COST.priority, n.x, n.y)) return;
+    if (!this.pay(this.costOf('priority'), n.x, n.y)) return;
     n.majorRoads = new Set(next);
     this.sim.rebuildNode(n);
     this.renderer.world.refresh();
@@ -1155,9 +1317,10 @@ export class Game {
   setMode(n: Node, mode: SigMode): void {
     const s = n.signal;
     if (!s || s.mode === mode) return;
-    const cost = mode === 'actuated' ? COST.actuated : mode === 'smart' ? COST.smart : 0;
+    const cost = mode === 'actuated' ? this.costOf('actuated') : mode === 'smart' ? this.costOf('smart') : 0;
     if (!this.pay(cost, n.x, n.y)) return;
     s.mode = mode;
+    if (mode === 'smart' && this.city.net.nodes.filter((m) => m.signal?.mode === 'smart').length >= ACH_NEED.smartGrid) this.unlock('smartGrid');
     // the AI starts from a plan fitted to recent traffic and refines it every cycle
     if (mode === 'smart') s.autoTime();
     this.afterChange();
@@ -1177,13 +1340,13 @@ export class Game {
   }
 
   toggleRTOR(n: Node): void {
-    if (!n.rtor && !this.pay(COST.rtor, n.x, n.y)) return;
+    if (!n.rtor && !this.pay(this.costOf('rtor'), n.x, n.y)) return;
     n.rtor = !n.rtor;
     this.afterChange();
   }
 
   toggleBox(n: Node): void {
-    if (!n.box && !this.pay(COST.box, n.x, n.y)) return;
+    if (!n.box && !this.pay(this.costOf('box'), n.x, n.y)) return;
     n.box = !n.box;
     this.renderer.world.buildMarkings();
     this.afterChange();
@@ -1208,8 +1371,9 @@ export class Game {
       w.remove(street);
       Audio.click();
     } else {
-      if (!this.pay(COST.greenwave, n.x, n.y)) return;
+      if (!this.pay(this.costOf('greenwave'), n.x, n.y)) return;
       w.add(street);
+      if (w.corridors.length >= ACH_NEED.greenWaves) this.unlock('greenWaves');
       this.ui?.toast(t('waveOn', { r: street }), 'good');
     }
     w.update(0, this.sim.signalNodes);
@@ -1244,14 +1408,15 @@ export class Game {
     const i = opts.indexOf(lane.arrows);
     const next = opts[(i + 1) % opts.length];
     const n = lane.link.to;
-    if (!this.pay(COST.arrows, n.x, n.y)) return;
+    const price = this.costOf('arrows');
+    if (!this.pay(price, n.x, n.y)) return;
     const old = lane.arrows;
     lane.arrows = next;
     this.sim.rebuildNode(n);
     if (!stronglyConnected(this.city.net)) {
       lane.arrows = old;
       this.sim.rebuildNode(n);
-      this.money += COST.arrows;
+      this.money += price;
       this.ui?.toast(t('wouldDisconnect'), 'warn');
       return;
     }
@@ -1262,7 +1427,7 @@ export class Game {
   /** cost of re-striping a road to ab / ba lanes, widening it when they do not fit */
   restripeCost(r: Road, ab: number, ba: number): number {
     const extra = slotsFor(r, ab, ba) - r.maxLanes;
-    return extra > 0 ? extra * COST.widen : COST.restripe;
+    return extra > 0 ? extra * this.costOf('widen') : this.costOf('restripe');
   }
 
   /** why the road cannot be widened to carry `slots` lanes, or null when it can */
@@ -1313,6 +1478,7 @@ export class Game {
     if (widen) {
       // the carriageway, its corners and everything along the curb move
       this.renderer.rebuildWorld(this.day);
+      this.bump('widened');
       this.ui?.toast(t('widened', { r: r.name }), 'good');
     }
     this.afterRoadChange(r, !widen);
@@ -1322,7 +1488,7 @@ export class Game {
   setSpeed(r: Road, kmh: number): void {
     const ms = kmh / 3.6;
     if (Math.abs(r.speed - ms) < 0.1) return;
-    if (!this.pay(COST.speed, (r.a.x + r.b.x) / 2, (r.a.y + r.b.y) / 2)) return;
+    if (!this.pay(this.costOf('speed'), (r.a.x + r.b.x) / 2, (r.a.y + r.b.y) / 2)) return;
     this.sim.restripe(r, r.lanesAB, r.lanesBA, r.busAB, r.busBA, ms, false);
     this.afterRoadChange(r);
   }
@@ -1331,7 +1497,7 @@ export class Game {
     const ab = forward ? !r.busAB : r.busAB;
     const ba = forward ? r.busBA : !r.busBA;
     const turningOn = forward ? !r.busAB : !r.busBA;
-    if (turningOn && !this.pay(COST.bus, (r.a.x + r.b.x) / 2, (r.a.y + r.b.y) / 2)) return;
+    if (turningOn && !this.pay(this.costOf('bus'), (r.a.x + r.b.x) / 2, (r.a.y + r.b.y) / 2)) return;
     this.sim.restripe(r, r.lanesAB, r.lanesBA, ab, ba, r.speed, false);
     this.afterRoadChange(r);
   }
@@ -1346,7 +1512,8 @@ export class Game {
 
   dispatchTow(inc: Incident): void {
     if (inc.tow) return;
-    if (!this.pay(COST.tow, inc.x, inc.y)) return;
+    const towCost = this.costOf('tow');
+    if (!this.pay(towCost, inc.x, inc.y)) return;
     const wreck = inc.vehicles[inc.vehicles.length - 1];
     let link: Link | null = null;
     let laneIdx = 0;
@@ -1386,9 +1553,10 @@ export class Game {
     if (!v && best) v = this.sim.trySpawn({ kind: 'tow', model: MODEL.tow, link: best, dest, goal: link });
     if (!v) {
       // could not spawn now: police take a bit longer
-      this.money += COST.tow;
+      this.money += towCost;
       return;
     }
+    this.bump('tows');
     v.tow = { target: inc.vehicles, phase: 'go', t: 0 };
     v.nav = true;
     v.boxBlock = false;
@@ -1404,7 +1572,7 @@ export class Game {
   sendPolice(n: Node): void {
     const until = this.policeCooldown.get(n.id) ?? 0;
     if (this.sim.time < until) return;
-    if (!this.pay(COST.police, n.x, n.y)) return;
+    if (!this.pay(this.costOf('police'), n.x, n.y)) return;
     let cleared = 0;
     for (const c of [...n.conns, ...n.dying]) {
       for (const v of c.vehs.slice()) {
@@ -1424,7 +1592,8 @@ export class Game {
         }
       }
     }
-    this.policeCooldown.set(n.id, this.sim.time + 45);
+    this.policeCooldown.set(n.id, this.sim.time + (this.perkRank('police') ? 22 : 45));
+    this.unlock('police');
     this.ui?.toast(`🚓 ${t('policeDone', { n: cleared })}`, 'good');
     this.afterChange(false);
   }
@@ -1439,7 +1608,7 @@ export class Game {
   }
 
   togglePreempt(): void {
-    if (!this.preempt && !this.pay(COST.preempt)) return;
+    if (!this.preempt && !this.pay(this.costOf('preempt'))) return;
     this.preempt = !this.preempt;
     this.afterChange();
   }

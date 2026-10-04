@@ -35,6 +35,21 @@ mutlu tutmalısın — memnuniyet sıfıra düşerse kovulursun.
   korunarak tekrar oynanır. 10. seviyeden sonra harita aynı kalır, trafik artmaya devam eder.
   Hedefler simülasyonla kalibre edildi: ilk seviyeler dokunulmamış ağla geçilebilir, 4.
   seviyeden itibaren ancak iyileştirilmiş bir ağ hedefe ulaşır.
+- **Seviye avantajları (Büyüyen Şehir):** Geçtiğin her seviyeden sonra üç avantaj kartından birini
+  seçersin; seçtiğin avantaj kariyerin boyunca geçerlidir ve bazıları birkaç kez alınabilir:
+  belediye ödeneği +%20, yolculuk geliri +%25, ışık/levha/göbekli kavşak %20 ucuz, şerit ve
+  genişletme %25 ucuz, işletme gideri −%30, kazalar −%25, sürücüler %25 daha sabırlı, yolculuk
+  puanı +%5, yarı fiyatına çekici ve daha hızlı temizlik, bedava acil araç önceliği ve +%50
+  ambulans ödülü, zirve trafiği −%8, yarı fiyatına sensörlü / Akıllı YZ ışık ve ek bakım yok,
+  bedava polis. Teklifler her kariyer için sabittir (oyunu kapatıp açmak yeniden çekiliş
+  yapmaz); seçmeden kapatırsan seçim bir sonraki açılışta karşına gelir.
+- **Başarımlar:** 23 başarım (bronz, gümüş, altın) her iki modda da kazanılır: ilk gün, üç yıldız,
+  rekor, Büyüyen Şehir'de 3./6./10. seviye, tüm kampanya şehirleri, 25 yıldız, bir kariyerde 6
+  avantaj, %85+ memnuniyet, kazasız gün, kimsenin vazgeçmediği gün, son dakika kurtarışı,
+  hedefin %140'ı, 5 göbekli kavşak, 5 yol genişletme, aynı anda 8 Akıllı YZ kavşağı, 3 yeşil
+  dalga, polisle kilit çözme, 2.000 otobüs yolcusu, 10 çekici, 15 zamanında ambulans, 10.000
+  yolculuk. Her başarım kasaya para ödülü yatırır; açıldığında ekranda rozet çıkar, gün sonu
+  raporunda listelenir. Ana menü ve duraklatma menüsündeki "Başarımlar" ekranı ilerlemeyi gösterir.
 - **Olaylar:** Yağmur (daha yavaş sürüş, daha uzun takip mesafesi), büyük etkinliklerin
   yarattığı ani talep, rastgele kazalar (çekici gönder ya da polis çağır), siren çalan
   ambulanslar (sürücüler kenara çekilir, istenirse sinyal önceliği), "danışman" ipuçları.

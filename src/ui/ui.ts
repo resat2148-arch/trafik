@@ -2,8 +2,10 @@
 
 import type { Game, GameUI, Phase, ToastKind } from '../game/game.ts';
 import { t, money, num } from '../game/i18n.ts';
+import type { StrKey } from '../game/i18n.ts';
 import { growthLevel } from '../world/growth.ts';
 import { STAR2, STAR3 } from '../game/config.ts';
+import { achById } from '../game/achievements.ts';
 import { DAY_KEYS, DAY_LENGTH, fmtHour, isRush } from '../game/clock.ts';
 import { intensityAt } from '../sim/demand.ts';
 import { Audio } from '../audio/audio.ts';
@@ -320,9 +322,59 @@ export class UI implements GameUI {
   }
 
   phaseChanged(p: Phase): void {
+    if (p === 'report' || p === 'complete') {
+      // the report lists the day's achievements itself
+      this.achQueue = [];
+      this.achEl?.remove();
+      this.achEl = null;
+      this.achBusy = false;
+    }
     this.menus.onPhase(p);
     this.tutorial.onPhase(p);
     if (p !== 'playing') this.game.select(null);
+  }
+
+  private achQueue: string[] = [];
+  private achBusy = false;
+  private achEl: HTMLElement | null = null;
+
+  /** an achievement badge slides in at the top of the screen (one at a time) */
+  achievement(id: string): void {
+    this.achQueue.push(id);
+    if (!this.achBusy) this.nextAchievement();
+  }
+
+  private nextAchievement(): void {
+    const id = this.achQueue.shift();
+    const a = id ? achById(id) : undefined;
+    if (!a) {
+      this.achBusy = false;
+      return;
+    }
+    this.achBusy = true;
+    Audio.success();
+    // over a briefing or report the badge shows at the bottom, clear of the card
+    const el = h(
+      'div',
+      { class: `ach-pop ${a.tier} ${this.game.phase === 'playing' ? '' : 'low'}` },
+      h('span', { class: 'ach-badge' }, a.icon),
+      h(
+        'div',
+        { class: 'ach-txt' },
+        h('span', { class: 'ach-lbl' }, t('achUnlocked')),
+        h('b', null, t(`ach_${a.id}` as StrKey)),
+      ),
+      a.reward ? h('span', { class: 'ach-reward' }, `+${money(a.reward)}`) : null,
+    );
+    this.root.append(el);
+    this.achEl = el;
+    setTimeout(() => el.classList.add('out'), 3600);
+    setTimeout(() => {
+      if (this.achEl !== el) return;
+      el.remove();
+      this.achEl = null;
+      this.nextAchievement();
+    }, 4000);
   }
 
   floatText(x: number, y: number, text: string, color: string): void {

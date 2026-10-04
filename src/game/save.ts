@@ -5,6 +5,9 @@ import type { QualityLevel } from '../render/renderer.ts';
 import type { SignalSave } from '../sim/signals.ts';
 import type { Control, Network } from '../sim/network.ts';
 import type { City } from '../world/citygen.ts';
+import type { LifeStats } from './achievements.ts';
+import { emptyLife } from './achievements.ts';
+import type { PerkId, Perks } from './perks.ts';
 import { Platform } from '../platform/crazygames.ts';
 
 export interface NodeSave {
@@ -42,6 +45,10 @@ export interface RunSave {
   stars: number[];
   /** green-wave streets; missing in older saves */
   waves?: { name: string; dir: number }[];
+  /** growing city: advantages picked so far, the offer waiting to be picked, and the seed of the offers */
+  perks?: Perks;
+  perkOffer?: PerkId[];
+  perkSeed?: number;
 }
 
 /** growing city: career progress */
@@ -76,6 +83,9 @@ export interface SaveData {
   growthRun: RunSave | null;
   /** mode played last (shown behind the main menu) */
   lastMode?: 'campaign' | 'growth';
+  /** achievements earned (id -> time) and the lifetime counters they count */
+  ach: Record<string, number>;
+  life: LifeStats;
 }
 
 const KEY = 'gridlock-city-save-v1';
@@ -93,6 +103,8 @@ export function defaultSave(): SaveData {
     run: null,
     growth: { level: 1, best: [], stars: [] },
     growthRun: null,
+    ach: {},
+    life: emptyLife(),
   };
 }
 
@@ -103,7 +115,7 @@ export function loadSave(): SaveData {
     const d = JSON.parse(raw) as SaveData;
     if (d.v !== 1) return defaultSave();
     const def = defaultSave();
-    return { ...def, ...d, progress: { ...def.progress, ...d.progress }, growth: { ...def.growth, ...d.growth } };
+    return { ...def, ...d, progress: { ...def.progress, ...d.progress }, growth: { ...def.growth, ...d.growth }, ach: { ...d.ach }, life: { ...def.life, ...d.life } };
   } catch {
     return defaultSave();
   }

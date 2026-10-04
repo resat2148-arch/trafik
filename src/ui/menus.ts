@@ -8,6 +8,10 @@ import { getLang, money, num, setLang, t } from '../game/i18n.ts';
 import type { StrKey } from '../game/i18n.ts';
 import { COST, POLICIES, STAR2, STAR3, TUTORIAL_UNLOCKS, dayConfig, growthDayConfig } from '../game/config.ts';
 import { GROWTH_LEVELS, growthLevel } from '../world/growth.ts';
+import { ACHIEVEMENTS, ACH_NEED } from '../game/achievements.ts';
+import type { AchDef } from '../game/achievements.ts';
+import { PERKS, perkById } from '../game/perks.ts';
+import type { PerkId } from '../game/perks.ts';
 import type { Building } from '../world/citygen.ts';
 import { fmtHour } from '../game/clock.ts';
 import { storeSave, defaultSave } from '../game/save.ts';
@@ -120,6 +124,7 @@ export class Menus {
         g.save.growthRun ? null : h('i', { class: 'new-tag' }, t('growthTag')),
       ),
       h('button', { class: 'btn big', onclick: () => this.citySelect() }, svg(ICON.city, 22), t('cities')),
+      h('button', { class: 'btn big', onclick: () => this.achievementsModal() }, h('span', { class: 'gb-ico' }, '🏆'), t('achievements'), h('span', { class: 'ach-count' }, `${achEarned(g.save.ach)}/${ACHIEVEMENTS.length}`)),
       h(
         'div',
         { class: 'row gap center' },
@@ -203,6 +208,7 @@ export class Menus {
       h('div', { class: 'intro-city' }, '🏗️ ', t('growthMode')),
       h('p', { class: 'hub-desc' }, t('growthDesc')),
       h('div', { class: 'hub-stats' }, h('div', null, h('span', null, t('rankLbl')), h('b', null, t(rankKey(totalStars)))), h('div', null, h('span', null, t('stars')), h('b', null, `★ ${totalStars} / ${GROWTH_LEVELS.length * 3}`)), h('div', null, h('span', null, t('totalScore')), h('b', null, num(totalScore)))),
+      run ? perkStrip(run.perks ?? {}) : null,
       list,
       h(
         'div',
@@ -211,6 +217,81 @@ export class Menus {
         h('div', { class: 'row center gap' }, run ? restart : null, h('button', { class: 'btn', onclick: () => this.closeTop() }, t('back'))),
       ),
     );
+  }
+
+  /** every achievement: earned ones in colour, the rest with their progress */
+  achievementsModal(): void {
+    Audio.click();
+    const g = this.game;
+    const grid = h('div', { class: 'ach-grid' });
+    for (const a of ACHIEVEMENTS) {
+      const got = !!g.save.ach[a.id];
+      const prog = !got && a.goal ? Math.min(1, g.save.life[a.goal.stat] / a.goal.n) : null;
+      grid.append(
+        h(
+          'div',
+          { class: `ach-card ${a.tier} ${got ? 'got' : 'locked'}` },
+          h('span', { class: 'ach-badge' }, a.icon),
+          h(
+            'div',
+            { class: 'ach-info' },
+            h('b', null, t(`ach_${a.id}` as StrKey)),
+            h('span', null, achDesc(a)),
+            prog !== null ? h('div', { class: 'ach-prog' }, h('i', { style: { width: `${prog * 100}%` } }), h('em', null, `${num(g.save.life[a.goal!.stat])} / ${num(a.goal!.n)}`)) : null,
+          ),
+          h('span', { class: 'ach-reward' }, got ? '✓' : `+${money(a.reward)}`),
+        ),
+      );
+    }
+    this.modal(
+      'achievements',
+      h('h2', null, '🏆 ', t('achievements'), h('span', { class: 'ach-count big' }, `${achEarned(g.save.ach)}/${ACHIEVEMENTS.length}`)),
+      h('p', null, t('achSub')),
+      grid,
+      h('div', { class: 'row center' }, h('button', { class: 'btn primary', onclick: () => this.closeTop() }, t('close'))),
+    );
+  }
+
+  /** growing city: pick one of the advantages offered after a level, then carry on */
+  perkChoice(after: () => void): void {
+    const g = this.game;
+    const offer = g.perkChoices;
+    if (!offer) {
+      after();
+      return;
+    }
+    const passed = (g.save.growthRun?.day ?? g.day) - 1;
+    const owned = g.save.growthRun?.perks ?? g.perks;
+    let done = false;
+    const cards = h('div', { class: 'perk-cards' });
+    offer.forEach((id, i) => {
+      const p = perkById(id)!;
+      const rank = (owned[id] ?? 0) + 1;
+      const card = h(
+        'button',
+        { class: 'perk-card', style: { animationDelay: `${0.1 + i * 0.12}s` }, onclick: () => {
+          if (done) return;
+          done = true;
+          card.classList.add('picked');
+          g.pickPerk(id);
+          this.ui.toast(`${p.icon} ${t('perkGained', { p: t(`perk_${id}` as StrKey) })}`, 'good');
+          setTimeout(() => {
+            this.closeTop();
+            after();
+          }, 650);
+        } },
+        h('span', { class: 'perk-ico' }, p.icon),
+        h(
+          'span',
+          { class: 'perk-txt' },
+          h('b', null, t(`perk_${id}` as StrKey)),
+          h('span', { class: 'perk-desc' }, t(`perkDesc_${id}` as StrKey)),
+          p.max > 1 ? h('span', { class: 'perk-rank' }, t('perkRank', { r: rank, m: p.max })) : null,
+        ),
+      );
+      cards.append(card);
+    });
+    this.modal('perks', h('h2', null, '🎁 ', t('perkTitle')), h('p', null, t('perkSub', { n: passed })), cards);
   }
 
   citySelect(): void {
@@ -285,6 +366,11 @@ export class Menus {
     const g = this.game;
     const lv = g.day;
     const def = growthLevel(lv);
+    if (g.perkChoices) {
+      // the game was closed before the last level's advantage was picked
+      this.perkChoice(() => this.levelIntro());
+      return;
+    }
     if (g.revealing) {
       g.revealing = false;
       const banner = h(
@@ -326,6 +412,7 @@ export class Menus {
     const chips = unlockedNow.length
       ? h('div', { class: 'unlock-box' }, h('div', { class: 'unlock-title' }, '🔓 ', t('unlocked')), h('div', { class: 'chips' }, ...unlockedNow.map((u) => h('span', { class: 'chip-u' }, t(UNLOCK_NAMES[u] ?? 'phases')))))
       : null;
+    if (Object.keys(g.perks).length) items.push(h('div', { class: 'intro-row perks-row' }, h('span', null, t('yourPerks')), perkStrip(g.perks)));
     const best = gp.best[lv - 1];
     const n = GROWTH_LEVELS.length;
     this.modal(
@@ -388,7 +475,7 @@ export class Menus {
         meter,
         h('p', null, t('levelFailedDesc', { t: num(target) })),
         parts,
-        null,
+        this.dayAchievements(),
       );
       card.append(
         h(
@@ -408,6 +495,7 @@ export class Menus {
     for (let i = 0; i < 3; i++) starsEl.append(h('span', { class: `bstar ${i < r.stars ? 'on' : ''}`, style: { animationDelay: `${0.25 + i * 0.25}s` } }, svg(ICON.star, 54)));
     const grantEl = h('b', null, `+${money(r.grant)}`);
     const next = lv < GROWTH_LEVELS.length ? growthLevel(lv + 1) : null;
+    const achEl = this.dayAchievements();
     const card = this.modal(
       'report',
       h('h2', null, t('levelPassed', { n: lv })),
@@ -421,6 +509,7 @@ export class Menus {
         h('div', { class: 'rep-row good' }, h('span', null, t('grant')), grantEl),
         h('div', { class: 'rep-row bad' }, h('span', null, t('expenses')), h('b', null, `-${money(r.upkeep)}`)),
       ),
+      achEl,
       next ? h('div', { class: 'next-district' }, '🏗️ ', t('nextDistrict', { d: next.district[getLang()] })) : null,
     );
     const btns = h('div', { class: 'row center gap' });
@@ -443,11 +532,29 @@ export class Menus {
     const finale = lv === GROWTH_LEVELS.length;
     btns.append(h('button', { class: 'btn big primary', onclick: () => {
       Audio.click();
-      this.clear();
-      if (finale) g.setPhase('complete');
-      else void g.nextDay();
+      // first the advantage for passing, then the next district
+      this.perkChoice(() => {
+        this.clear();
+        if (finale) g.setPhase('complete');
+        else void g.nextDay();
+      });
     } }, finale ? '🏆 ' : '', t('nextLevel'), ' ➜'));
     card.append(btns);
+  }
+
+  /** chips of the achievements earned during the day that just ended */
+  private dayAchievements(): HTMLElement | null {
+    const ids = this.game.dayAch;
+    if (!ids.length) return null;
+    return h(
+      'div',
+      { class: 'day-ach' },
+      h('div', { class: 'day-ach-title' }, '🏆 ', t('achToday')),
+      h('div', { class: 'chips' }, ...ids.map((id) => {
+        const a = ACHIEVEMENTS.find((x) => x.id === id);
+        return h('span', { class: `chip-u ach-chip ${a?.tier ?? ''}` }, a?.icon ?? '', ' ', t(`ach_${id}` as StrKey));
+      })),
+    );
   }
 
   /** growing city: the last planned district is done */
@@ -509,7 +616,7 @@ export class Menus {
         h('div', { class: 'rep-row good' }, h('span', null, t('grant')), grantEl),
         row('expenses', `-${money(r.upkeep)}`, 'bad'),
       ),
-      null,
+      this.dayAchievements(),
     );
     const btns = h('div', { class: 'row center gap' });
     if (Platform.hasAds || import.meta.env.DEV) {
@@ -622,10 +729,12 @@ export class Menus {
     this.modal(
       'pause',
       h('h2', null, t('paused')),
+      g.growth ? h('div', { class: 'pause-perks' }, h('div', { class: 'sec-title' }, t('yourPerks')), perkStrip(g.perks)) : null,
       h(
         'div',
         { class: 'col gap' },
         h('button', { class: 'btn big primary', onclick: resume }, svg(ICON.play, 20), t('resume')),
+        h('button', { class: 'btn', onclick: () => this.achievementsModal() }, '🏆 ', t('achievements'), h('span', { class: 'ach-count' }, `${achEarned(g.save.ach)}/${ACHIEVEMENTS.length}`)),
         h('button', { class: 'btn', onclick: () => this.settings() }, svg(ICON.gear, 18), t('settings')),
         h('button', { class: 'btn', onclick: () => this.help() }, svg(ICON.help, 18), t('howToPlay')),
         h('button', { class: 'btn', onclick: () => this.toMenu() }, svg(ICON.home, 18), t('menu')),
@@ -743,7 +852,7 @@ export class Menus {
           'div',
           { class: `pol ${pre ? 'on' : ''} ${lock ? 'disabled' : ''}` },
           h('div', { class: 'pol-info' }, h('b', null, '🚑 ', t('emergencyPreempt')), h('span', null, t('emergencyPreemptDesc'))),
-          pre ? null : h('span', { class: 'cost' }, money(COST.preempt)),
+          pre ? null : h('span', { class: 'cost' }, money(g.costOf('preempt'))),
           h('button', { class: `switch ${pre ? 'on' : ''}`, disabled: lock, onclick: () => {
             if (lock) return;
             g.togglePreempt();
@@ -776,6 +885,39 @@ function confirmBox(msg: string): boolean {
   document.querySelector('.toasts')?.prepend(el);
   setTimeout(() => el.remove(), 3500);
   return false;
+}
+
+/** number of achievements earned */
+function achEarned(ach: Record<string, number>): number {
+  return ACHIEVEMENTS.filter((a) => ach[a.id]).length;
+}
+
+/** an achievement's description with its threshold filled in */
+function achDesc(a: AchDef): string {
+  const need: Record<string, number> = {
+    starCollector: ACH_NEED.starCollector,
+    perkCollector: ACH_NEED.perkCollector,
+    happyCity: ACH_NEED.happyCity,
+    noAbandon: ACH_NEED.noAbandon,
+    comeback: ACH_NEED.comeback,
+    overachiever: Math.round(ACH_NEED.overachiever * 100),
+    smartGrid: ACH_NEED.smartGrid,
+    greenWaves: ACH_NEED.greenWaves,
+  };
+  return t(`achDesc_${a.id}` as StrKey, { n: num(a.goal?.n ?? need[a.id] ?? 0) });
+}
+
+/** the career's advantages as icons with their rank (name and effect on hover) */
+function perkStrip(perks: Partial<Record<PerkId, number>>): HTMLElement {
+  const owned = PERKS.filter((p) => (perks[p.id] ?? 0) > 0);
+  if (!owned.length) return h('div', { class: 'perk-strip empty' }, t('noPerks'));
+  return h(
+    'div',
+    { class: 'perk-strip' },
+    ...owned.map((p) =>
+      h('span', { class: 'perk-chip', title: `${t(`perk_${p.id}` as StrKey)}: ${t(`perkDesc_${p.id}` as StrKey)}` }, p.icon, (perks[p.id] ?? 0) > 1 ? h('em', null, `×${perks[p.id]}`) : null),
+    ),
+  );
 }
 
 /** career title for the stars collected in the growing city */

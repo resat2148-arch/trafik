@@ -3,7 +3,7 @@
 import type { Game } from '../game/game.ts';
 import { t, money } from '../game/i18n.ts';
 import type { StrKey } from '../game/i18n.ts';
-import { COST, unlockDay } from '../game/config.ts';
+import { unlockDay } from '../game/config.ts';
 import type { Unlock } from '../game/config.ts';
 import { ROAD_SPECS, SIG_G, SIG_P, kmh, slotsFor } from '../sim/network.ts';
 import type { Arm, Control, Lane, Node, Road } from '../sim/network.ts';
@@ -155,7 +155,7 @@ export class Panels {
           'button',
           { class: `btn wide police ${cd > 0 ? 'disabled' : ''}`, title: t('policeDesc'), onclick: () => g.sendPolice(n) },
           h('span', null, '🚓 ', t('police')),
-          h('span', { class: 'cost' }, money(COST.police)),
+          h('span', { class: 'cost' }, money(this.game.costOf('police'))),
         ),
       );
     }
@@ -164,7 +164,7 @@ export class Panels {
       const lock = this.locked('box');
       body.append(
         this.desc('boxDesc', true),
-        this.toggleRow(svg(ICON.box, 20), t('boxJunction'), n.box, lock ? null : `${money(COST.box)}`, lock, () => g.toggleBox(n), lock ? this.lockNote('box') : null),
+        this.toggleRow(svg(ICON.box, 20), t('boxJunction'), n.box, lock ? null : `${money(this.game.costOf('box'))}`, lock, () => g.toggleBox(n), lock ? this.lockNote('box') : null),
       );
     }
     // lanes & turns
@@ -203,7 +203,7 @@ export class Panels {
         );
       }
     body.append(
-      h('div', { class: 'sec-title' }, t('majorRoad'), h('span', { class: 'sec-extra' }, money(COST.priority))),
+      h('div', { class: 'sec-title' }, t('majorRoad'), h('span', { class: 'sec-extra' }, money(this.game.costOf('priority')))),
       this.desc('majorHint'),
       grid,
       h('div', { class: 'sec-title' }, t('minorSign')),
@@ -234,8 +234,8 @@ export class Panels {
     // controller mode
     const modes: [SigMode, Unlock, number][] = [
       ['fixed', 'timing', 0],
-      ['actuated', 'actuated', COST.actuated],
-      ['smart', 'smart', COST.smart],
+      ['actuated', 'actuated', this.game.costOf('actuated')],
+      ['smart', 'smart', this.game.costOf('smart')],
     ];
     const modeRow = h('div', { class: 'seg' });
     for (const [m, u, c] of modes) {
@@ -277,18 +277,18 @@ export class Panels {
     });
     const warn = h('div', { class: 'hint bad', style: { display: s.allRed < 1.5 ? '' : 'none' } }, '⚠ ', t('allRedWarn'));
     body.append(h('div', { class: 'sec-title' }, t('allRed')), this.desc('allRedDesc'), h('div', { class: 'slider-row' }, h('span', null, t('allRed')), range, val), warn);
-    if (!this.locked('rtor')) body.append(this.desc('rtorDesc', true), this.toggleRow(svg(ICON.signal, 18), t('rtor'), n.rtor, money(COST.rtor), false, () => g.toggleRTOR(n)));
+    if (!this.locked('rtor')) body.append(this.desc('rtorDesc', true), this.toggleRow(svg(ICON.signal, 18), t('rtor'), n.rtor, money(this.game.costOf('rtor')), false, () => g.toggleRTOR(n)));
   }
 
   private waveSection(body: HTMLElement, n: Node): void {
     const g = this.game;
     const w = g.sim.waves;
-    body.append(h('div', { class: 'sec-title' }, t('greenWave'), h('span', { class: 'sec-extra' }, money(COST.greenwave))), this.desc('greenWaveDesc'));
+    body.append(h('div', { class: 'sec-title' }, t('greenWave'), h('span', { class: 'sec-extra' }, money(this.game.costOf('greenwave')))), this.desc('greenWaveDesc'));
     for (const name of [...new Set(n.arms.map((a) => a.road.name))]) {
       const c = w.get(name);
       const signals = g.sim.signalNodes.filter((m) => m.arms.some((a) => a.road.name === name)).length;
       const lock = !c && signals < 2;
-      body.append(this.toggleRow(svg(ICON.wave, 18), name, !!c, money(COST.greenwave), lock, () => g.toggleWave(n, name), lock ? h('div', { class: 'hint' }, t('waveNeeds')) : null));
+      body.append(this.toggleRow(svg(ICON.wave, 18), name, !!c, money(this.game.costOf('greenwave')), lock, () => g.toggleWave(n, name), lock ? h('div', { class: 'hint' }, t('waveNeeds')) : null));
       if (!c || c.members.length < 2) continue;
       // the cross streets at both ends name the two directions
       const cross = (m: Node): string => m.name.split(' & ').find((x) => x !== name) ?? m.name;
@@ -350,7 +350,7 @@ export class Panels {
     const g = this.game;
     const lock = this.locked('arrows');
     const sec = h('div', { class: 'lanes-sec' });
-    body.append(h('div', { class: 'sec-title' }, t('approaches'), h('span', { class: 'sec-extra' }, money(COST.arrows))), this.desc('approachesDesc'), lock ? this.lockNote('arrows') : h('div', { class: 'hint' }, t('laneHint')), sec);
+    body.append(h('div', { class: 'sec-title' }, t('approaches'), h('span', { class: 'sec-extra' }, money(this.game.costOf('arrows')))), this.desc('approachesDesc'), lock ? this.lockNote('arrows') : h('div', { class: 'hint' }, t('laneHint')), sec);
     for (const arm of n.arms) {
       const inL = arm.inLink;
       if (!inL || inL.lanes.length === 0) continue;
@@ -442,7 +442,7 @@ export class Panels {
     if (lock) note = this.lockNote('restripe');
     else if (pend.note) note = h('div', { class: 'hint bad' }, pend.note);
     else if (changed && extra > 0) note = h('div', { class: 'hint' }, '🚧 ', extra === 1 ? t('widenNote1') : t('widenNote', { n: extra }));
-    else if (!changed) note = h('div', { class: 'hint' }, t('lanesHint', { c: money(COST.widen) }));
+    else if (!changed) note = h('div', { class: 'hint' }, t('lanesHint', { c: money(this.game.costOf('widen')) }));
     add(
       body,
       h('div', { class: 'sec-title' }, t('lanes'), h('span', { class: 'sec-extra' }, t('widthM', { m: Math.round(r.width) }))),
@@ -476,7 +476,7 @@ export class Panels {
     const speeds = [30, 40, 50, 60, 70];
     add(
       body,
-      h('div', { class: 'sec-title' }, t('speedLimit'), h('span', { class: 'sec-extra' }, money(COST.speed))),
+      h('div', { class: 'sec-title' }, t('speedLimit'), h('span', { class: 'sec-extra' }, money(this.game.costOf('speed')))),
       this.desc('speedDesc'),
       slock ? this.lockNote('speed') : null,
       h(
@@ -489,7 +489,7 @@ export class Panels {
     );
     // bus lanes
     const block = this.locked('bus');
-    add(body, h('div', { class: 'sec-title' }, t('busLane'), h('span', { class: 'sec-extra' }, money(COST.bus))), this.desc('busDesc'), block ? this.lockNote('bus') : null);
+    add(body, h('div', { class: 'sec-title' }, t('busLane'), h('span', { class: 'sec-extra' }, money(this.game.costOf('bus')))), this.desc('busDesc'), block ? this.lockNote('bus') : null);
     if (r.lanesAB > 1) body.append(this.toggleRow(svg(ICON.bus, 18), t('towards', { r: toB }), r.busAB, null, block, () => g.toggleBus(r, true)));
     if (r.lanesBA > 1) body.append(this.toggleRow(svg(ICON.bus, 18), t('towards', { r: toA }), r.busBA, null, block, () => g.toggleBus(r, false)));
     void ROAD_SPECS;
@@ -547,7 +547,7 @@ export class Panels {
           h('div', { class: 'hint' }, timer),
           inc.tow
             ? h('div', { class: 'hint good' }, svg(ICON.tow, 16), t('towOnWay'))
-            : h('button', { class: 'btn primary wide', onclick: () => g.dispatchTow(inc) }, svg(ICON.tow, 18), t('dispatchTow'), h('span', { class: 'cost' }, money(COST.tow))),
+            : h('button', { class: 'btn primary wide', onclick: () => g.dispatchTow(inc) }, svg(ICON.tow, 18), t('dispatchTow'), h('span', { class: 'cost' }, money(this.game.costOf('tow')))),
         ),
       );
     }
